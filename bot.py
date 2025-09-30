@@ -15,8 +15,8 @@ if not DEEPSEEK_API_KEY:
     raise ValueError("❌ DEEPSEEK_API_KEY が設定されていません！")
 
 # ====== DeepSeek API エンドポイント ======
-DEEPSEEK_MOD_URL = "https://api.deepseek.ai/analyze"   # moderation
-DEEPSEEK_CHAT_URL = "https://api.deepseek.ai/chat"     # chat
+DEEPSEEK_MOD_URL = "https://api.deepseek.com/lyze"   # moderation
+DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat"   # chat
 
 # ====== Intents ======
 intents = discord.Intents.default()
