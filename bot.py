@@ -15,8 +15,8 @@ if not DEEPSEEK_API_KEY:
     raise ValueError("❌ DEEPSEEK_API_KEY が設定されていません！")
 
 # ====== DeepSeek API エンドポイント ======
-DEEPSEEK_MOD_URL = "https://api.deepseek.com/lyze"       # モデレーション
-DEEPSEEK_CHAT_URL = "https://api.deepseek.com/v1/chat"  # チャット
+DEEPSEEK_MOD_URL = "https://api.deepseek.com/lyze"                      # モデレーション
+DEEPSEEK_CHAT_URL = "https://api.deepseek.com/v1/chat/completions"      # チャット（最新）
 
 # ====== Intents ======
 intents = discord.Intents.default()
@@ -42,13 +42,13 @@ def is_toxic(text: str, threshold: float = 0.6) -> bool:
             r = requests.post(DEEPSEEK_MOD_URL, json=data, headers=headers, timeout=5)
             r.raise_for_status()
             result = r.json()
-            score = result.get("toxicity", 0.0)  # スコア取得
+            score = result.get("toxicity", 0.0)
             print(f"[DEBUG] Toxicity score: {score}")
             return score >= threshold
         except requests.exceptions.RequestException as e:
             print(f"Attempt {attempt+1} – DeepSeek moderation error:", e)
             time.sleep(1)
-    return False  # 3回失敗なら安全側で False
+    return False
 
 # ============================
 # DeepSeek: チャット応答 (リトライ付き)
@@ -56,7 +56,7 @@ def is_toxic(text: str, threshold: float = 0.6) -> bool:
 def ask_deepseek(message_text: str) -> str:
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
     data = {
-        "model": "deepseek-chat",
+        "model": "gpt-5-mini",  # 最新モデル
         "messages": [{"role": "user", "content": message_text}],
         "temperature": 0.7,
     }
