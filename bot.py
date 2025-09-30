@@ -15,8 +15,8 @@ if not DEEPSEEK_API_KEY:
     raise ValueError("❌ DEEPSEEK_API_KEY が設定されていません！")
 
 # ====== DeepSeek API エンドポイント ======
-DEEPSEEK_MOD_URL = "https://api.deepseek.ai/analyze"  # moderation
-DEEPSEEK_CHAT_URL = "https://api.deepseek.ai/chat"    # chat
+DEEPSEEK_MOD_URL = "https://api.deepseek.ai/analyze"   # moderation
+DEEPSEEK_CHAT_URL = "https://api.deepseek.ai/chat"     # chat
 
 # ====== Intents ======
 intents = discord.Intents.default()
@@ -32,24 +32,26 @@ SPAM_COUNT = 3           # 連投回数
 TIMEOUT_DURATION = 60    # 秒
 
 # ============================
-# DeepSeek: 荒らし判定 (スコア方式)
+# DeepSeek: 荒らし判定 (リトライ付き)
 # ============================
 def is_toxic(text: str, threshold: float = 0.6) -> bool:
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
     data = {"text": text, "model": "moderation"}
-    try:
-        r = requests.post(DEEPSEEK_MOD_URL, json=data, headers=headers, timeout=5)
-        r.raise_for_status()
-        result = r.json()
-        score = result.get("toxicity", 0.0)  # スコア取得
-        print(f"[DEBUG] Toxicity score: {score}")
-        return score >= threshold
-    except Exception as e:
-        print("DeepSeek moderation error:", e)
-        return False
+    for attempt in range(3):
+        try:
+            r = requests.post(DEEPSEEK_MOD_URL, json=data, headers=headers, timeout=5)
+            r.raise_for_status()
+            result = r.json()
+            score = result.get("toxicity", 0.0)  # スコア取得
+            print(f"[DEBUG] Toxicity score: {score}")
+            return score >= threshold
+        except requests.exceptions.RequestException as e:
+            print(f"Attempt {attempt+1} – DeepSeek moderation error:", e)
+            time.sleep(1)
+    return False  # 3回失敗なら安全側で False
 
 # ============================
-# DeepSeek: チャット応答
+# DeepSeek: チャット応答 (リトライ付き)
 # ============================
 def ask_deepseek(message_text: str) -> str:
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
@@ -58,14 +60,16 @@ def ask_deepseek(message_text: str) -> str:
         "messages": [{"role": "user", "content": message_text}],
         "temperature": 0.7,
     }
-    try:
-        r = requests.post(DEEPSEEK_CHAT_URL, json=data, headers=headers, timeout=10)
-        r.raise_for_status()
-        result = r.json()
-        return result["choices"][0]["message"]["content"]
-    except Exception as e:
-        print("DeepSeek chat error:", e)
-        return "⚠️ AI応答でエラーが発生しました。"
+    for attempt in range(3):
+        try:
+            r = requests.post(DEEPSEEK_CHAT_URL, json=data, headers=headers, timeout=10)
+            r.raise_for_status()
+            result = r.json()
+            return result["choices"][0]["message"]["content"]
+        except requests.exceptions.RequestException as e:
+            print(f"Attempt {attempt+1} – DeepSeek chat error:", e)
+            time.sleep(1)
+    return "⚠️ AI応答に失敗しました（ネットワークエラー）"
 
 # ============================
 # スラッシュコマンド
@@ -161,4 +165,3 @@ async def on_message(message):
 # ============================
 if __name__ == "__main__":
     bot.run(TOKEN)
-
