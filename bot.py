@@ -16,7 +16,7 @@ if not DEEPSEEK_API_KEY:
 
 # ====== DeepSeek API エンドポイント ======
 DEEPSEEK_MOD_URL = "https://api.deepseek.com/lyze"   # moderation
-DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions"   # chat
+DEEPSEEK_CHAT_URL = "https://api.deepseek.com"   # chat
 
 # ====== Intents ======
 intents = discord.Intents.default()
