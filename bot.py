@@ -1,95 +1,194 @@
 import os
 import time
-from collections import defaultdict, deque
+import random
+import requests
+from collections import defaultdict
 import discord
 from discord.ext import commands
-from openai import OpenAI
-import aiohttp
-import asyncio
 
-# =======================
-# 環境変数
-# =======================
+# ====== 環境変数 ======
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
-NUKE_LOG_CHANNEL_ID = int(os.getenv("NUKE_LOG_CHANNEL_ID", "0"))
+NUKE_LOG_CHANNEL_ID = int(os.getenv("NUKE_LOG_CHANNEL_ID", 0))
 
-if not TOKEN or not DEEPSEEK_API_KEY:
-    raise ValueError("必須環境変数が設定されていません！")
+SPAM_THRESHOLD = 30
+SPAM_COUNT = 6
+TIMEOUT_DURATION = 300  # 5分
 
-# =======================
-# DeepSeekクライアント
-# =======================
-client_ds = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+if not TOKEN:
+    raise ValueError("❌ DISCORD_BOT_TOKEN が設定されていません！")
 
-# =======================
-# Bot設定
-# =======================
+# ====== Intents ======
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
-intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# =======================
-# スパム監視
-# =======================
-user_messages = defaultdict(lambda: deque(maxlen=6))
-SPAM_THRESHOLD = 30
-TIMEOUT_DURATION = 300  # 5分
+# ====== スパム管理 ======
+user_messages = defaultdict(list)
 
-# =======================
-# nuke監視
-# =======================
-NUKE_WINDOW = 30
-NUKE_THRESHOLD = 3
-nuke_events = defaultdict(lambda: deque(maxlen=5))
+# ====== ソビエト画像 ======
+soviet_images = [
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Lenin_in_1920_%28cropped%29.jpg/120px-Lenin_in_1920_%28cropped%29.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/StalinCropped1943.jpg/120px-StalinCropped1943.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/4/42/Georgy_Malenkov_1964.jpg/120px-Georgy_Malenkov_1964.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Bundesarchiv_Bild_183-B0628-0015-035%2C_Nikita_S._Chruschtschow.jpg/120px-Bundesarchiv_Bild_183-B0628-0015-035%2C_Nikita_S._Chruschtschow.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/Leonid_Brezjnev%2C_leider_van_de_Sovjet-Unie%2C_Bestanddeelnr_925-6564.jpg/120px-Leonid_Brezjnev%2C_leider_van_de_Sovjet-Unie%2C_Bestanddeelnr_925-6564.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/1/12/ANDROPOV1980S.jpg/120px-ANDROPOV1980S.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/Konstantin_Ustinovi%C4%8D_%C4%8Cern%C4%9Bnko%2C_1973.jpg/120px-Konstantin_Ustinovi%C4%8D_%C4%8Cern%C4%9Bnko%2C_1973.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Mikhail_Gorbachev_in_the_White_House_Library_%28cropped%29.jpg/120px-Mikhail_Gorbachev_in_the_White_House_Library_%28cropped%29.jpg",
+    "https://upload.wikimedia.org/wikipedia/ja/timeline/cei2ebprzo3xl74db6w4dxnhtnyqcas.png"
+]
 
-async def log_nuke(event: str, user: discord.Member, guild: discord.Guild):
-    if NUKE_LOG_CHANNEL_ID == 0:
-        return
-    channel = guild.get_channel(NUKE_LOG_CHANNEL_ID)
-    if channel:
-        await channel.send(f"⚠️ Nuke検知: {event} by {user} ({user.id})")
-
-# =======================
-# DeepSeek非同期
-# =======================
-async def ask_deepseek(text: str) -> str:
+# ====== AI応答 ======
+def ask_ai(message_text: str) -> str:
+    if not DEEPSEEK_API_KEY:
+        return "⚠️ AIは未設定のため固定応答です。"
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
+    data = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": message_text}],
+        "temperature": 0.7,
+    }
     try:
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client_ds.chat.completions.create(
-                model="deepseek-chat",
-                messages=[{"role": "user", "content": text}],
-                stream=False
-            )
-        )
-        return response.choices[0].message.content
+        r = requests.post("https://api.deepseek.com/v1/chat", json=data, headers=headers, timeout=10)
+        r.raise_for_status()
+        result = r.json()
+        return result["choices"][0]["message"]["content"]
     except:
-        return "⚠️ AI応答に失敗しました"
+        return "⚠️ AI応答に失敗しました（固定応答で返します）。"
 
-# =======================
-# ニュース取得
-# =======================
-async def fetch_news(query: str, max_results=3):
+# ====== ニュース取得 ======
+def get_news(keyword: str = "ソビエト"):
     if not GNEWS_API_KEY:
-        return ["⚠️ GNews APIキーが設定されていません。"]
-    url = f"https://gnews.io/api/v4/search?q={query}&lang=ja&max={max_results}&apikey={GNEWS_API_KEY}"
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, timeout=5) as resp:
-                data = await resp.json()
-                articles = data.get("articles", [])
-                return [f"**{a.get('title')}**\n{a.get('url')}" for a in articles] or ["⚠️ ニュースがありません"]
-        except:
-            return ["⚠️ ニュース取得に失敗しました"]
+        return ["⚠️ ニュースAPIが未設定です。"]
+    url = f"https://gnews.io/api/v4/search?q={keyword}&lang=ja&token={GNEWS_API_KEY}&max=5"
+    try:
+        r = requests.get(url, timeout=5)
+        r.raise_for_status()
+        articles = r.json().get("articles", [])
+        return [f"{a['title']} - {a['url']}" for a in articles]
+    except:
+        return ["⚠️ ニュース取得に失敗しました。"]
 
-# =======================
-# 起動処理
-# =======================
+# ====== 遊び系 ======
+def roll_dice():
+    return random.randint(1, 6)
+
+def rps_result(user: str, bot_choice: str):
+    beats = {"グー": "チョキ", "チョキ": "パー", "パー": "グー"}
+    if user == bot_choice:
+        return "引き分け"
+    elif beats[user] == bot_choice:
+        return "あなたの勝ち！"
+    else:
+        return "あなたの負け…"
+
+def fortune():
+    return random.choice(["大吉", "中吉", "小吉", "末吉", "凶"])
+
+# ===========================
+# スラッシュコマンド
+# ===========================
+@bot.tree.command(name="ping", description="動作確認")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message("🏓 Pong!")
+
+@bot.tree.command(name="help", description="BOTの使い方")
+async def help_command(interaction: discord.Interaction):
+    help_text = """
+📖 **コマンド一覧**
+- `/ping` : 動作確認
+- `/help` : ヘルプ表示
+- `/画像` : ランダムなソビエト画像
+- `/dice` : サイコロを振る
+- `/rps <手>` : じゃんけん
+- `/fortune` : おみくじ
+- `/news <キーワード>` : ニュース取得
+- ロール管理: `/ロール付与`, `/ロール削除`, `/ロール申請`
+"""
+    await interaction.response.send_message(help_text)
+
+@bot.tree.command(name="画像", description="ランダムなソビエト画像")
+async def soviet_image(interaction: discord.Interaction):
+    await interaction.response.send_message(random.choice(soviet_images))
+
+@bot.tree.command(name="dice", description="サイコロを振る")
+async def dice(interaction: discord.Interaction):
+    await interaction.response.send_message(f"🎲 出た目: {roll_dice()}")
+
+@bot.tree.command(name="rps", description="じゃんけん")
+async def rps(interaction: discord.Interaction, hand: str):
+    if hand not in ["グー", "チョキ", "パー"]:
+        await interaction.response.send_message("❌ グー/チョキ/パー のいずれかを指定してください")
+        return
+    bot_hand = random.choice(["グー", "チョキ", "パー"])
+    result = rps_result(hand, bot_hand)
+    await interaction.response.send_message(f"あなた: {hand} / BOT: {bot_hand}\n結果: {result}")
+
+@bot.tree.command(name="fortune", description="おみくじ")
+async def fortune_command(interaction: discord.Interaction):
+    await interaction.response.send_message(f"おみくじ: {fortune()}")
+
+@bot.tree.command(name="news", description="ニュース取得")
+async def news_command(interaction: discord.Interaction, keyword: str = "ソビエト"):
+    articles = get_news(keyword)
+    await interaction.response.send_message("\n".join(articles))
+
+# ====== ロール管理 ======
+@bot.tree.command(name="ロール付与", description="指定ユーザーにロールを付与")
+async def role_add(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    try:
+        await member.add_roles(role)
+        await interaction.response.send_message(f"{member.mention} に {role.name} を付与しました")
+    except Exception as e:
+        await interaction.response.send_message(f"❌ エラー: {e}")
+
+@bot.tree.command(name="ロール削除", description="指定ユーザーからロールを削除")
+async def role_remove(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    try:
+        await member.remove_roles(role)
+        await interaction.response.send_message(f"{member.mention} から {role.name} を削除しました")
+    except Exception as e:
+        await interaction.response.send_message(f"❌ エラー: {e}")
+
+@bot.tree.command(name="ロール申請", description="自分にロールを申請")
+async def role_request(interaction: discord.Interaction, role: discord.Role):
+    await interaction.response.send_message(f"{interaction.user.mention} が {role.name} のロールを申請しました")
+
+# ===========================
+# メッセージ処理
+# ===========================
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    # ---- スパム（リンク数） ----
+    now = time.time()
+    uid = message.author.id
+    user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
+    if "http://" in message.content or "https://" in message.content:
+        user_messages[uid].append(now)
+        if len(user_messages[uid]) >= SPAM_COUNT:
+            try:
+                await message.delete()
+                await message.channel.send(f"{message.author.mention} リンクの連投は禁止です！", delete_after=5)
+                await message.author.timeout(duration=TIMEOUT_DURATION)
+            except:
+                pass
+
+    # ---- BOTメンションでAI応答 ----
+    if bot.user in message.mentions:
+        reply = ask_ai(message.content)
+        await message.channel.send(f"{message.author.mention} {reply}")
+
+    await bot.process_commands(message)
+
+# ===========================
+# 起動
+# ===========================
 @bot.event
 async def on_ready():
     try:
@@ -99,112 +198,9 @@ async def on_ready():
         print("Slash command sync error:", e)
     print(f"Logged in as {bot.user} — READY")
 
-# =======================
-# メッセージ監視
-# =======================
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
+# ===========================
+# メイン
+# ===========================
+if __name__ == "__main__":
+    bot.run(TOKEN)
 
-    now = time.time()
-    uid = message.author.id
-
-    # ----- スパム
-    user_messages[uid].append(now)
-    if len(user_messages[uid]) >= 6 and now - user_messages[uid][0] < SPAM_THRESHOLD:
-        try:
-            await message.delete()
-            await message.channel.send(f"{message.author.mention} 🚫 短時間連投は禁止")
-            await message.author.timeout(duration=TIMEOUT_DURATION)
-        except: pass
-        return
-
-    # ----- リンクスパム
-    if sum(1 for w in message.content.split() if w.startswith("http")) >= 6:
-        try:
-            await message.delete()
-            await message.channel.send(f"{message.author.mention} 🚫 リンクスパムは禁止")
-            await message.author.timeout(duration=TIMEOUT_DURATION)
-        except: pass
-        return
-
-    # ----- 画像スパム
-    if message.attachments and len(message.attachments) > 2:
-        try:
-            await message.delete()
-            await message.channel.send(f"{message.author.mention} 🚫 画像スパムは禁止")
-            await message.author.timeout(duration=TIMEOUT_DURATION)
-        except: pass
-        return
-
-    # ----- DeepSeekチャット
-    if bot.user in message.mentions:
-        reply = await ask_deepseek(message.content)
-        await message.channel.send(f"{message.author.mention} {reply}")
-        return
-
-    await bot.process_commands(message)
-
-# =======================
-# スラッシュコマンド
-# =======================
-@bot.tree.command(name="ping", description="動作確認")
-async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message("🏓 Pong!")
-
-@bot.tree.command(name="ヘルプ", description="このBOTの使い方を表示")
-async def help_command(interaction: discord.Interaction):
-    help_text = """
-📖 **コマンド一覧**
-- `/ping` : 動作確認
-- `/ヘルプ` : このヘルプを表示
-- `/news <キーワード>` : ニュース取得
-- `/role_add <メンバー> <ロール>` : ロール付与
-- `/role_remove <メンバー> <ロール>` : ロール削除
-- `/role_request <ロール>` : ロール申請
-- BOTにメンション : AIチャット開始
-"""
-    await interaction.response.send_message(help_text)
-
-@bot.tree.command(name="news", description="ニュース取得")
-async def news(interaction: discord.Interaction, query: str):
-    results = await fetch_news(query)
-    await interaction.response.send_message("\n\n".join(results))
-
-@bot.tree.command(name="role_add", description="ロール付与")
-async def role_add(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
-    try:
-        await member.add_roles(role)
-        await interaction.response.send_message(f"{member.mention} に {role.name} を付与しました")
-    except Exception as e:
-        await interaction.response.send_message(f"エラー: {e}")
-
-@bot.tree.command(name="role_remove", description="ロール削除")
-async def role_remove(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
-    try:
-        await member.remove_roles(role)
-        await interaction.response.send_message(f"{member.mention} から {role.name} を削除しました")
-    except Exception as e:
-        await interaction.response.send_message(f"エラー: {e}")
-
-@bot.tree.command(name="role_request", description="ロール申請")
-async def role_request(interaction: discord.Interaction, role: discord.Role):
-    await interaction.response.send_message(f"{interaction.user.mention} が {role.name} を申請しました")
-
-# =======================
-# nuke監視: チャンネル削除
-# =======================
-@bot.event
-async def on_guild_channel_delete(channel):
-    user = channel.guild.owner  # 検知対象: オーナー以外に変更可能
-    now = time.time()
-    nuke_events[channel.guild.id].append(now)
-    times = nuke_events[channel.guild.id]
-    if len(times) >= NUKE_THRESHOLD and times[-1] - times[0] < NUKE_WINDOW:
-        await log_nuke("大量チャンネル削除", user, channel.guild)
-
-# =======================
-# BOT起動
-# =======================
-bot.run(TOKEN)
