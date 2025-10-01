@@ -12,8 +12,8 @@ import asyncio
 # =======================
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-NUKE_LOG_CHANNEL_ID = int(os.getenv("NUKE_LOG_CHANNEL_ID", "0"))
 GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
+NUKE_LOG_CHANNEL_ID = int(os.getenv("NUKE_LOG_CHANNEL_ID", "0"))
 
 if not TOKEN or not DEEPSEEK_API_KEY:
     raise ValueError("必須環境変数が設定されていません！")
@@ -30,8 +30,6 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.guilds = True
-intents.messages = True
-intents.reactions = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =======================
@@ -73,18 +71,6 @@ async def ask_deepseek(text: str) -> str:
     except:
         return "⚠️ AI応答に失敗しました"
 
-async def is_toxic(text: str, threshold=0.6) -> bool:
-    loop = asyncio.get_event_loop()
-    def check_sync():
-        import requests
-        headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
-        data = {"text": text, "model": "moderation"}
-        r = requests.post("https://api.deepseek.com/lyze", json=data, headers=headers, timeout=5)
-        if r.status_code == 200:
-            return r.json().get("toxicity", 0.0) >= threshold
-        return False
-    return await loop.run_in_executor(None, check_sync)
-
 # =======================
 # ニュース取得
 # =======================
@@ -109,7 +95,8 @@ async def on_ready():
     try:
         synced = await bot.tree.sync()
         print(f"✅ スラッシュコマンド {len(synced)} 件同期")
-    except: pass
+    except Exception as e:
+        print("Slash command sync error:", e)
     print(f"Logged in as {bot.user} — READY")
 
 # =======================
@@ -165,6 +152,20 @@ async def on_message(message):
 @bot.tree.command(name="ping", description="動作確認")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("🏓 Pong!")
+
+@bot.tree.command(name="ヘルプ", description="このBOTの使い方を表示")
+async def help_command(interaction: discord.Interaction):
+    help_text = """
+📖 **コマンド一覧**
+- `/ping` : 動作確認
+- `/ヘルプ` : このヘルプを表示
+- `/news <キーワード>` : ニュース取得
+- `/role_add <メンバー> <ロール>` : ロール付与
+- `/role_remove <メンバー> <ロール>` : ロール削除
+- `/role_request <ロール>` : ロール申請
+- BOTにメンション : AIチャット開始
+"""
+    await interaction.response.send_message(help_text)
 
 @bot.tree.command(name="news", description="ニュース取得")
 async def news(interaction: discord.Interaction, query: str):
