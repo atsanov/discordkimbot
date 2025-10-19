@@ -92,7 +92,7 @@ async def help_command(interaction: discord.Interaction):
 - /ロール申請 : ロールを申請
 - /ロール付与 : 管理者用
 - /ロール削除 : 管理者用
-- /DM : 管理者が任意ユーザーにメッセージ送信
+- /dm : 管理者が任意ユーザーにメッセージ送信
 """
     await interaction.response.send_message(help_text)
 
@@ -222,9 +222,9 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# ==================== /DM コマンド（管理者専用） ====================
+# ==================== /dm コマンド（管理者専用） ====================
 @app_commands.checks.has_permissions(administrator=True)
-@bot.tree.command(name="DM", description="管理者: 指定ユーザーにメッセージを送信")
+@bot.tree.command(name="dm", description="管理者: 指定ユーザーにメッセージを送信")
 @app_commands.describe(user="送信先ユーザー", content="メッセージ内容")
 async def dm_command(interaction: discord.Interaction, user: discord.User, content: str):
     try:
