@@ -1,7 +1,7 @@
 import os
 import random
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -13,8 +13,8 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
 NUKE_LOG_CHANNEL_ID = int(os.getenv("NUKE_LOG_CHANNEL_ID", 0))
 
-if not TOKEN:
-    raise ValueError("❌ DISCORD_BOT_TOKEN が設定されていません")
+if not TOKEN or not DEEPSEEK_API_KEY or not GNEWS_API_KEY:
+    raise ValueError("❌ 必須環境変数が設定されていません")
 
 # ==================== Bot 初期化 ====================
 intents = discord.Intents.default()
@@ -27,11 +27,6 @@ user_messages = {}
 SPAM_THRESHOLD = 30
 SPAM_COUNT = 6
 TIMEOUT_DURATION = 3600  # 1時間
-
-# ==================== 危険リンク検知 ====================
-BLOCK_URL_KEYWORDS = [
-    "discord.gg", "bit.ly", "tinyurl.com", "is.gd", "t.co", "example-illegal-site.com"
-]
 
 # ==================== ソ連画像 ====================
 SOVIET_IMAGES = [
@@ -49,81 +44,6 @@ SOVIET_IMAGES = [
 def is_admin(user: discord.Member):
     return user.guild_permissions.administrator or user.guild_permissions.manage_roles
 
-# ==================== ブロック処理 ====================
-async def block_user(message, reason="不明"):
-    try:
-        embed = discord.Embed(
-            title="🚫 クソスパマーをブロックしました。",
-            description=f"{message.author.mention} を1時間タイムアウトしました\n理由: {reason}\n検知メッセージ: {message.content}",
-            color=0xff0000
-        )
-        await message.channel.send(embed=embed)
-
-        until_time = datetime.now(timezone.utc) + timedelta(seconds=TIMEOUT_DURATION)
-        await message.author.timeout(until=until_time)
-
-        class UnTimeoutView(View):
-            @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
-            async def untout(self, button: Button, interaction: discord.Interaction):
-                if not is_admin(interaction.user):
-                    await interaction.response.send_message("❌ 権限なし", ephemeral=True)
-                    return
-                try:
-                    await message.author.remove_timeout()
-                    await interaction.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
-                except:
-                    await interaction.response.send_message("❌ 解除失敗", ephemeral=True)
-
-        await message.channel.send(view=UnTimeoutView())
-        await message.delete()
-    except Exception as e:
-        print(f"[ERROR] ブロック失敗: {e}")
-
-# ==================== メッセージ監視 ====================
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    # 自動応答
-    if "MURさん 夜中腹減んないすか？" in message.content:
-        await message.channel.send(f"{message.author.mention} 腹減ったなぁ")
-    if "ソ連画像" in message.content:
-        url = random.choice(SOVIET_IMAGES)
-        embed = discord.Embed(title="🇷🇺 ソビエト画像", color=0xff0000)
-        embed.set_image(url=url)
-        await message.channel.send(embed=embed)
-
-    # スパム監視
-    now = time.time()
-    uid = message.author.id
-    user_messages.setdefault(uid, [])
-    user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
-    user_messages[uid].append(now)
-    if len(user_messages[uid]) >= SPAM_COUNT:
-        await block_user(message, reason="短時間連投")
-        return
-
-    # 危険リンク検知
-    for keyword in BLOCK_URL_KEYWORDS:
-        if keyword in message.content and not is_admin(message.author):
-            await block_user(message, reason="不審リンク")
-            return
-
-    await bot.process_commands(message)
-
-# ==================== !yaju コマンド ====================
-@bot.command(name="yaju")
-async def yaju(ctx, user: discord.User = None, count: int = 1):
-    if not user:
-        await ctx.send("|||||||||||||||||||||"*10)
-        return
-    for _ in range(count):
-        try:
-            await user.send("|||||||||||||||||||||"*10)
-        except:
-            await ctx.send(f"❌ {user.display_name} にDM送信できません")
-
 # ==================== スラッシュコマンド ====================
 @bot.tree.command(name="ping", description="動作確認")
 async def ping(interaction: discord.Interaction):
@@ -136,6 +56,18 @@ async def soviet_image(interaction: discord.Interaction):
     embed.set_image(url=url)
     await interaction.response.send_message(embed=embed)
 
+@bot.tree.command(name="help", description="Botのコマンド一覧")
+async def help_command(interaction: discord.Interaction):
+    embed = discord.Embed(title="ヘルプ", description="Botで使えるコマンド一覧", color=0x00ff00)
+    embed.add_field(name="!yaju [user_id 回数]", value="指定した回数だけ||||をDMで送信（任意）", inline=False)
+    embed.add_field(name="/画像", value="ランダムでソ連画像を表示", inline=False)
+    embed.add_field(name="/dm", value="管理者用: 指定ユーザーにDM送信", inline=False)
+    embed.add_field(name="/ロール付与", value="管理者用: 指定ユーザーにロール付与", inline=False)
+    embed.add_field(name="/ロール削除", value="管理者用: 指定ユーザーからロール削除", inline=False)
+    embed.add_field(name="/ロール申請", value="希望するロールを申請", inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ==================== 管理者 DM ====================
 @bot.tree.command(name="dm", description="管理者: 指定ユーザーにDM送信")
 @app_commands.describe(user="送信先ユーザー", message="送信するメッセージ")
 async def dm_command(interaction: discord.Interaction, user: discord.User, message: str):
@@ -149,13 +81,143 @@ async def dm_command(interaction: discord.Interaction, user: discord.User, messa
     except discord.Forbidden:
         await interaction.response.send_message(f"❌ {user.display_name} にDM送信できません", ephemeral=True)
 
-# ==================== /help コマンド ====================
-@bot.tree.command(name="help", description="スラッシュコマンド一覧")
-async def help_command(interaction: discord.Interaction):
-    embed = discord.Embed(title="/help", description="利用可能なスラッシュコマンド一覧", color=0x00ff00)
-    for cmd in bot.tree.get_commands():
-        embed.add_field(name=f"/{cmd.name}", value=cmd.description or "説明なし", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+# ==================== !yaju コマンド ====================
+@bot.command(name="yaju")
+async def yaju(ctx, target_id: int = None, count: int = 1):
+    if target_id:
+        try:
+            user = await bot.fetch_user(target_id)
+            for _ in range(count):
+                await user.send("||||"*10)
+            await ctx.send(f"✅ {user.display_name} に送信完了")
+        except Exception as e:
+            await ctx.send(f"❌ 送信失敗: {e}")
+    else:
+        await ctx.send("||||"*10)
+
+# ==================== ロール付与/削除 ====================
+@app_commands.checks.has_permissions(manage_roles=True)
+@bot.tree.command(name="ロール付与", description="管理者: ユーザーにロール付与")
+@app_commands.describe(user="対象ユーザー", role="付与するロール")
+async def role_add(interaction: discord.Interaction, user: discord.Member, role: discord.Role):
+    try:
+        await user.add_roles(role)
+        await interaction.response.send_message(f"✅ {user.display_name} に {role.name} を付与")
+    except Exception as e:
+        await interaction.response.send_message(f"❌ 付与失敗: {e}")
+
+@app_commands.checks.has_permissions(manage_roles=True)
+@bot.tree.command(name="ロール削除", description="管理者: ユーザーからロール削除")
+@app_commands.describe(user="対象ユーザー", role="削除するロール")
+async def role_remove(interaction: discord.Interaction, user: discord.Member, role: discord.Role):
+    try:
+        await user.remove_roles(role)
+        await interaction.response.send_message(f"✅ {user.display_name} から {role.name} を削除")
+    except Exception as e:
+        await interaction.response.send_message(f"❌ 削除失敗: {e}")
+
+# ==================== ロール申請 ====================
+@bot.tree.command(name="ロール申請", description="希望ロールを申請")
+@app_commands.describe(role="希望ロール")
+async def role_request(interaction: discord.Interaction, role: discord.Role):
+    class RoleApproveView(View):
+        def __init__(self):
+            super().__init__(timeout=None)
+
+        @discord.ui.button(label="承認", style=discord.ButtonStyle.success)
+        async def approve(self, button, i: discord.Interaction):
+            if not is_admin(i.user):
+                await i.response.send_message("❌ 権限がありません", ephemeral=True)
+                return
+            await interaction.user.add_roles(role)
+            await i.response.edit_message(content=f"✅ {interaction.user.display_name} に {role.name} 付与済", view=None)
+            self.stop()
+
+        @discord.ui.button(label="拒否", style=discord.ButtonStyle.danger)
+        async def reject(self, button, i: discord.Interaction):
+            if not is_admin(i.user):
+                await i.response.send_message("❌ 権限がありません", ephemeral=True)
+                return
+            await i.response.edit_message(content=f"❌ {interaction.user.display_name} の申請拒否", view=None)
+            self.stop()
+
+    await interaction.response.send_message(f"{interaction.user.mention} が `{role.name}` を申請", view=RoleApproveView())
+
+# ==================== メッセージ監視 ====================
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    # 自動応答
+    if "MURさん 夜中腹減んないすか？" in message.content:
+        await message.channel.send(f"{message.author.mention} 腹減ったなぁ")
+
+    if "ソ連画像" in message.content:
+        url = random.choice(SOVIET_IMAGES)
+        embed = discord.Embed(title="🇷🇺 ソビエト画像", color=0xff0000)
+        embed.set_image(url=url)
+        await message.channel.send(embed=embed)
+
+    # スパム監視
+    now = time.time()
+    uid = message.author.id
+    user_messages.setdefault(uid, [])
+    user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
+    user_messages[uid].append(now)
+
+    if len(user_messages[uid]) >= SPAM_COUNT:
+        try:
+            await message.delete()
+            embed = discord.Embed(
+                title="🚫 クソスパマーをブロックしました。",
+                description=f"{message.author.mention} を1時間タイムアウトしました\n理由: 短時間連投\n検知メッセージ: {message.content}",
+                color=0xff0000
+            )
+            until_time = datetime.now(datetime.utc) + timedelta(seconds=TIMEOUT_DURATION)
+            await message.author.timeout(until=until_time)
+            # タイムアウト解除ボタン
+            class UnTimeoutView(View):
+                @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
+                async def untout(self, button: Button, interaction: discord.Interaction):
+                    if not is_admin(interaction.user):
+                        await interaction.response.send_message("❌ 権限なし", ephemeral=True)
+                        return
+                    await message.author.remove_timeout()
+                    await interaction.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
+
+            await message.channel.send(embed=embed, view=UnTimeoutView())
+        except Exception as e:
+            print(f"[ERROR] ブロック失敗: {e}")
+        return
+
+    # 招待リンク検知
+    if "discord.gg" in message.content or "bit.ly" in message.content or "t.co" in message.content:
+        if not is_admin(message.author):
+            try:
+                await message.delete()
+                embed = discord.Embed(
+                    title="🚫 クソスパマーをブロックしました。",
+                    description=f"{message.author.mention} を1時間タイムアウトしました\n理由: 不審リンク\n検知メッセージ: {message.content}",
+                    color=0xff0000
+                )
+                until_time = datetime.now(datetime.utc) + timedelta(seconds=TIMEOUT_DURATION)
+                await message.author.timeout(until=until_time)
+
+                class UnTimeoutView(View):
+                    @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
+                    async def untout(self, button: Button, interaction: discord.Interaction):
+                        if not is_admin(interaction.user):
+                            await interaction.response.send_message("❌ 権限なし", ephemeral=True)
+                            return
+                        await message.author.remove_timeout()
+                        await interaction.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
+
+                await message.channel.send(embed=embed, view=UnTimeoutView())
+            except Exception as e:
+                print(f"[ERROR] ブロック失敗: {e}")
+
+    await bot.process_commands(message)
 
 # ==================== 起動 ====================
 @bot.event
