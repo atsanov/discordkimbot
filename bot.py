@@ -1,11 +1,11 @@
 import os
 import random
 import time
-from datetime import datetime, timedelta, timezone
 import discord
 from discord.ext import commands
 from discord import app_commands
-from discord.ui import View
+from discord.ui import View, Button
+from datetime import datetime, timedelta
 
 # ==================== 環境変数 ====================
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -25,7 +25,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 user_messages = {}
 SPAM_THRESHOLD = 30
 SPAM_COUNT = 6
-TIMEOUT_DURATION = 3600  # 1時間
+TIMEOUT_DURATION = 3600  # 秒
 
 # ==================== ソ連画像 ====================
 SOVIET_IMAGES = [
@@ -55,7 +55,6 @@ async def soviet_image(interaction: discord.Interaction):
     embed.set_image(url=url)
     await interaction.response.send_message(embed=embed)
 
-# ==================== 管理者 DM ====================
 @bot.tree.command(name="dm", description="管理者: 指定ユーザーにDM送信")
 @app_commands.describe(user="送信先ユーザー", message="送信するメッセージ")
 async def dm_command(interaction: discord.Interaction, user: discord.User, message: str):
@@ -71,10 +70,18 @@ async def dm_command(interaction: discord.Interaction, user: discord.User, messa
 
 # ==================== !yaju コマンド ====================
 @bot.command(name="yaju")
-async def yaju(ctx, *, message=""):
-    await ctx.send("||||"*10)
+async def yaju(ctx, target: discord.User = None, count: int = 1):
+    if target is None:
+        target = ctx.author
+    count = max(1, min(count, 20))
+    try:
+        for _ in range(count):
+            await target.send("||||"*10)
+        await ctx.send(f"✅ {target.mention} に {count} 回DM送信しました")
+    except discord.Forbidden:
+        await ctx.send(f"❌ {target.mention} にDM送信できません")
 
-# ==================== ロール付与/削除 ====================
+# ==================== ロール管理 ====================
 @app_commands.checks.has_permissions(manage_roles=True)
 @bot.tree.command(name="ロール付与", description="管理者: ユーザーにロール付与")
 @app_commands.describe(user="対象ユーザー", role="付与するロール")
@@ -95,7 +102,6 @@ async def role_remove(interaction: discord.Interaction, user: discord.Member, ro
     except Exception as e:
         await interaction.response.send_message(f"❌ 削除失敗: {e}")
 
-# ==================== ロール申請 ====================
 @bot.tree.command(name="ロール申請", description="希望ロールを申請")
 @app_commands.describe(role="希望ロール")
 async def role_request(interaction: discord.Interaction, role: discord.Role):
@@ -123,6 +129,8 @@ async def role_request(interaction: discord.Interaction, role: discord.Role):
     await interaction.response.send_message(f"{interaction.user.mention} が `{role.name}` を申請", view=RoleApproveView())
 
 # ==================== メッセージ監視 ====================
+BLOCKED_DOMAINS = ["discord.gg", "bit.ly", "tinyurl.com", "is.gd", "t.co"]  # 簡易例
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -145,39 +153,47 @@ async def on_message(message):
     user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
     user_messages[uid].append(now)
 
-    block_needed = len(user_messages[uid]) >= SPAM_COUNT
-    link_detected = "discord.gg" in message.content
+    if len(user_messages[uid]) >= SPAM_COUNT:
+        try:
+            await message.delete()
+            until_time = datetime.utcnow() + timedelta(seconds=TIMEOUT_DURATION)
+            await message.author.timeout(until=until_time)
+            embed = discord.Embed(
+                title="🚫 クソスパマーをブロックしました。",
+                description=f"{message.author.mention} を1時間タイムアウトしました\n理由: 短時間連投\n検知メッセージ: {message.content}",
+                color=0xff0000
+            )
+            # タイムアウト解除ボタン
+            class UnTimeoutView(View):
+                @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
+                async def untout(self, button, i: discord.Interaction):
+                    if not is_admin(i.user):
+                        await i.response.send_message("❌ 権限なし", ephemeral=True)
+                        return
+                    await message.author.remove_timeout()
+                    await i.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
+            await message.channel.send(embed=embed, view=UnTimeoutView())
+        except Exception as e:
+            print(f"[ERROR] タイムアウト失敗: {e}")
+        return
 
-    if block_needed or link_detected:
-        if not is_admin(message.author):
-            try:
-                await message.delete()
-                reason = "短時間連投" if block_needed else "不審リンク"
-                detected_content = message.content
-                until_time = datetime.now(timezone.utc) + timedelta(seconds=TIMEOUT_DURATION)
-                await message.author.edit(timed_out_until=until_time)
-
-                embed = discord.Embed(
-                    title="🚫 クソスパマーをブロックしました。",
-                    description=f"{message.author.mention} を1時間タイムアウトしました\n理由: {reason}\n検知メッセージ: {detected_content}",
-                    color=0xff0000
-                )
-                await message.channel.send(embed=embed)
-
-                # タイムアウト解除ボタン
-                class UnTimeoutView(View):
-                    @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
-                    async def untout(self, button, i: discord.Interaction):
-                        if not is_admin(i.user):
-                            await i.response.send_message("❌ 権限なし", ephemeral=True)
-                            return
-                        await message.author.edit(timed_out_until=None)
-                        await i.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
-
-                await message.channel.send("管理者専用: タイムアウト解除", view=UnTimeoutView())
-
-            except Exception as e:
-                print(f"[ERROR] タイムアウト失敗: {e}")
+    # 招待リンクなど検知
+    for domain in BLOCKED_DOMAINS:
+        if domain in message.content.lower():
+            if not is_admin(message.author):
+                try:
+                    await message.delete()
+                    until_time = datetime.utcnow() + timedelta(seconds=TIMEOUT_DURATION)
+                    await message.author.timeout(until=until_time)
+                    embed = discord.Embed(
+                        title="🚫 クソスパマーをブロックしました。",
+                        description=f"{message.author.mention} を1時間タイムアウトしました\n理由: 不審リンク\n検知メッセージ: {message.content}",
+                        color=0xff0000
+                    )
+                    await message.channel.send(embed=embed, view=UnTimeoutView())
+                except Exception as e:
+                    print(f"[ERROR] タイムアウト失敗: {e}")
+            return
 
     await bot.process_commands(message)
 
