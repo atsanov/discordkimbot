@@ -7,7 +7,9 @@ from collections import defaultdict
 import discord
 from discord.ext import commands
 from discord import app_commands
-from discord.ui import View, Button, ButtonStyle
+from discord.ui import View, Button
+from discord import ButtonStyle
+
 
 # ==================== 環境変数 ====================
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
