@@ -1,6 +1,7 @@
 import os
 import random
 import time
+from datetime import datetime, timedelta
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -10,7 +11,6 @@ from discord.ui import View
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
-NUKE_LOG_CHANNEL_ID = int(os.getenv("NUKE_LOG_CHANNEL_ID", 0))
 
 if not TOKEN or not DEEPSEEK_API_KEY or not GNEWS_API_KEY:
     raise ValueError("❌ 必須環境変数が設定されていません")
@@ -23,9 +23,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ==================== スパム管理 ====================
 user_messages = {}
-SPAM_THRESHOLD = 30
+SPAM_THRESHOLD = 30  # 秒
 SPAM_COUNT = 6
-TIMEOUT_DURATION = 3600  # 1時間
+TIMEOUT_DURATION = 3600  # 秒（1時間）
 
 # ==================== ソ連画像 ====================
 SOVIET_IMAGES = [
@@ -138,29 +138,23 @@ async def on_message(message):
         embed.set_image(url=url)
         await message.channel.send(embed=embed)
 
-    # スパム監視＆招待リンク
+    # スパム監視
     now = time.time()
     uid = message.author.id
     user_messages.setdefault(uid, [])
     user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
     user_messages[uid].append(now)
 
-    block_needed = False
-    reason = ""
-    detected_content = message.content
-
-    if len(user_messages[uid]) >= SPAM_COUNT:
-        block_needed = True
-        reason = "短時間連投"
-
-    if "discord.gg" in message.content and not is_admin(message.author):
-        block_needed = True
-        reason = "不審リンク"
-
-    if block_needed:
+    block_needed = len(user_messages[uid]) >= SPAM_COUNT
+    invite_detected = "discord.gg" in message.content
+    if block_needed or invite_detected:
         try:
             await message.delete()
-            await message.author.timeout(duration=TIMEOUT_DURATION)
+            reason = "短時間連投" if block_needed else "不審リンク"
+            detected_content = message.content
+            until_time = datetime.utcnow() + timedelta(seconds=TIMEOUT_DURATION)
+            await message.author.timeout(until=until_time)
+
             embed = discord.Embed(
                 title="🚫 クソスパマーをブロックしました。",
                 description=(
@@ -172,19 +166,20 @@ async def on_message(message):
             )
             await message.channel.send(embed=embed)
 
-            # タイムアウト解除ボタン（管理者専用）
+            # タイムアウト解除ボタン
             class UnTimeoutView(View):
                 @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
                 async def untout(self, button, i: discord.Interaction):
                     if not is_admin(i.user):
-                        await i.response.send_message("❌ 権限がありません", ephemeral=True)
+                        await i.response.send_message("❌ 権限なし", ephemeral=True)
                         return
                     await message.author.edit(timed_out_until=None)
-                    await i.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました。", view=None)
+                    await i.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
 
             await message.channel.send("管理者専用: タイムアウト解除", view=UnTimeoutView())
         except Exception as e:
             print(f"[ERROR] タイムアウト失敗: {e}")
+        return
 
     await bot.process_commands(message)
 
