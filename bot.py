@@ -40,6 +40,10 @@ SOVIET_IMAGES = [
     "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Mikhail_Gorbachev_in_the_White_House_Library_%28cropped%29.jpg/120px-Mikhail_Gorbachev_in_the_White_House_Library_%28cropped%29.jpg"
 ]
 
+# ==================== 宣伝チャンネル・ログチャンネル ====================
+promo_channel_id = None
+log_channel_id = None
+
 # ==================== ユーティリティ ====================
 def is_admin(user: discord.Member):
     return user.guild_permissions.administrator or user.guild_permissions.manage_roles
@@ -66,6 +70,9 @@ async def help_command(interaction: discord.Interaction):
         "/ロール削除 - 管理者: ユーザーからロール削除\n"
         "/ロール申請 - 希望ロールを申請\n"
         "!yaju - 任意メッセージの連投\n"
+        "/set_promo_channel - 宣伝チャンネル設定\n"
+        "/set_log_channel - ログチャンネル設定\n"
+        "/send_promo_button - 宣伝ボタン送信"
     )
     await interaction.response.send_message(help_text, ephemeral=True)
 
@@ -97,7 +104,7 @@ async def yaju(ctx, user: discord.User=None, count: int=1):
     except discord.Forbidden:
         await ctx.send("❌ DM送信できません")
 
-# ==================== ロール付与/削除 ====================
+# ==================== ロール付与/削除/申請 ====================
 @app_commands.checks.has_permissions(manage_roles=True)
 @bot.tree.command(name="ロール付与", description="管理者: ユーザーにロール付与")
 @app_commands.describe(user="対象ユーザー", role="付与するロール")
@@ -118,7 +125,6 @@ async def role_remove(interaction: discord.Interaction, user: discord.Member, ro
     except Exception as e:
         await interaction.response.send_message(f"❌ 削除失敗: {e}")
 
-# ==================== ロール申請 ====================
 @bot.tree.command(name="ロール申請", description="希望ロールを申請")
 @app_commands.describe(role="希望ロール")
 async def role_request(interaction: discord.Interaction, role: discord.Role):
@@ -144,6 +150,69 @@ async def role_request(interaction: discord.Interaction, role: discord.Role):
             self.stop()
 
     await interaction.response.send_message(f"{interaction.user.mention} が `{role.name}` を申請", view=RoleApproveView())
+
+# ==================== 宣伝機能 ====================
+@bot.tree.command(name="set_promo_channel", description="宣伝チャンネルを設定（管理者専用）")
+@app_commands.describe(channel="宣伝チャンネル")
+async def set_promo_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    global promo_channel_id
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者専用です", ephemeral=True)
+        return
+    promo_channel_id = channel.id
+    await interaction.response.send_message(f"✅ 宣伝チャンネルを {channel.mention} に設定しました", ephemeral=True)
+
+@bot.tree.command(name="set_log_channel", description="宣伝ログチャンネルを設定（管理者専用）")
+@app_commands.describe(channel="ログチャンネル")
+async def set_log_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    global log_channel_id
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者専用です", ephemeral=True)
+        return
+    log_channel_id = channel.id
+    await interaction.response.send_message(f"✅ ログチャンネルを {channel.mention} に設定しました", ephemeral=True)
+
+@bot.tree.command(name="send_promo_button", description="宣伝ボタンを送信（管理者専用）")
+async def send_promo_button(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者専用です", ephemeral=True)
+        return
+
+    view = discord.ui.View()
+    button = discord.ui.Button(label="📢 宣伝を実行", style=discord.ButtonStyle.success, custom_id="promo_button")
+    view.add_item(button)
+
+    embed = discord.Embed(title="📣 宣伝実行", description="このボタンを押すとBOTが宣伝リンクを送信します", color=0x00ff00)
+    await interaction.response.send_message(embed=embed, view=view)
+
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    global promo_channel_id, log_channel_id
+    if not interaction.type == discord.InteractionType.component:
+        return
+
+    if interaction.data.get("custom_id") == "promo_button":
+        user = interaction.user
+        guild = interaction.guild
+
+        if not promo_channel_id:
+            await interaction.response.send_message("❌ 宣伝チャンネル未設定", ephemeral=True)
+            return
+
+        promo_channel = guild.get_channel(promo_channel_id)
+        if not promo_channel:
+            await interaction.response.send_message("❌ 宣伝チャンネルが見つかりません", ephemeral=True)
+            return
+
+        invite = await promo_channel.create_invite(max_age=3600, max_uses=1)
+        await promo_channel.send(f"📢 宣伝リンク：{invite.url}")
+
+        if log_channel_id:
+            log_channel = guild.get_channel(log_channel_id)
+            if log_channel:
+                await log_channel.send(f"📝 {user.mention} が宣伝を実行しました。")
+
+        await interaction.response.send_message("✅ 宣伝リンクを送信しました！", ephemeral=True)
 
 # ==================== メッセージ監視 ====================
 @bot.event
@@ -181,15 +250,14 @@ async def on_message(message):
 
             class UnTimeoutView(View):
                 @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
-                async def untout(self, button, interaction):
-                    if not is_admin(interaction.user):
-                        await interaction.response.send_message("❌ 権限なし", ephemeral=True)
+                async def untout(self, button, i: discord.Interaction):
+                    if not is_admin(i.user):
+                        await i.response.send_message("❌ 権限なし", ephemeral=True)
                         return
                     await message.author.remove_timeout()
-                    await interaction.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
+                    await i.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
 
             await message.channel.send(embed=embed, view=UnTimeoutView())
-
         except Exception as e:
             print(f"[ERROR] ブロック失敗: {e}")
         return
@@ -209,15 +277,14 @@ async def on_message(message):
 
                 class UnTimeoutView(View):
                     @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
-                    async def untout(self, button, interaction):
-                        if not is_admin(interaction.user):
-                            await interaction.response.send_message("❌ 権限なし", ephemeral=True)
+                    async def untout(self, button, i: discord.Interaction):
+                        if not is_admin(i.user):
+                            await i.response.send_message("❌ 権限なし", ephemeral=True)
                             return
                         await message.author.remove_timeout()
-                        await interaction.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
+                        await i.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
 
                 await message.channel.send(embed=embed, view=UnTimeoutView())
-
             except Exception as e:
                 print(f"[ERROR] ブロック失敗: {e}")
 
