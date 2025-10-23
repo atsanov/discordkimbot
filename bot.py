@@ -4,17 +4,17 @@ import time
 import discord
 from discord.ext import commands
 from discord import app_commands
-from discord.ui import View, Button, Modal, TextInput
+from discord.ui import View
 from datetime import datetime, timedelta, timezone
-import aiohttp
 
 # ==================== 環境変数 ====================
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
 NUKE_LOG_CHANNEL_ID = int(os.getenv("NUKE_LOG_CHANNEL_ID", 0))
+GUILD_ID = int(os.getenv("GUILD_ID", 0))  # Guild単位同期用
 
-if not TOKEN or not DEEPSEEK_API_KEY or not GNEWS_API_KEY:
+if not TOKEN or not DEEPSEEK_API_KEY or not GNEWS_API_KEY or not GUILD_ID:
     raise ValueError("❌ 必須環境変数が設定されていません")
 
 # ==================== Bot 初期化 ====================
@@ -27,23 +27,50 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 user_messages = {}
 SPAM_THRESHOLD = 30
 SPAM_COUNT = 6
-LONG_TEXT_LENGTH = 800  # 長文もタイムアウト対象
-TIMEOUT_DURATION = 3600  # 1時間
+LONG_TEXT_THRESHOLD = 300  # 文字数で長文判定
+TIMEOUT_DURATION = 3600  # 秒
 
 # ==================== ソ連画像 ====================
 SOVIET_IMAGES = [
-    # 既存画像
     "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Lenin_in_1920_%28cropped%29.jpg/120px-Lenin_in_1920_%28cropped%29.jpg",
     "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/StalinCropped1943.jpg/120px-StalinCropped1943.jpg",
     "https://upload.wikimedia.org/wikipedia/commons/thumb/4/42/Georgy_Malenkov_1964.jpg/120px-Georgy_Malenkov_1964.jpg",
-    # 追加画像
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Yuri_Gagarin_in_1961.jpg/120px-Yuri_Gagarin_in_1961.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/1/16/Vladimir_Lenin_at_work_1920s.jpg/120px-Vladimir_Lenin_at_work_1920s.jpg"
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Bundesarchiv_Bild_183-B0628-0015-035%2C_Nikita_S._Chruschtschow.jpg/120px-Bundesarchiv_Bild_183-B0628-0015-035%2C_Nikita_S._Chruschtschow.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/Leonid_Brezjnev%2C_leider_van_de_Sovjet-Unie%2C_Bestanddeelnr_925-6564.jpg/120px-Leonid_Brezjnev%2C_leider_van_de_Sovjet-Unie%2C_Bestanddeelnr_925-6564.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/1/12/ANDROPOV1980S.jpg/120px-ANDROPOV1980S.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/Konstantin_Ustinovi%C4%8D_%C4%8Cern%C4%9Bnko%2C_1973.jpg/120px-Konstantin_Ustinovi%C4%8D_%C4%8Cern%C4%9Bnko%2C_1973.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Mikhail_Gorbachev_in_the_White_House_Library_%28cropped%29.jpg/120px-Mikhail_Gorbachev_in_the_White_House_Library_%28cropped%29.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/7/73/Yuri_Andropov_1983.jpg/120px-Yuri_Andropov_1983.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Leonid_Brezhnev_1973.jpg/120px-Leonid_Brezhnev_1973.jpg"
 ]
 
 # ==================== ユーティリティ ====================
 def is_admin(user: discord.Member):
     return user.guild_permissions.administrator or user.guild_permissions.manage_roles
+
+async def timeout_member(member: discord.Member, reason: str, channel: discord.TextChannel, content: str):
+    try:
+        until_time = datetime.now(timezone.utc) + timedelta(seconds=TIMEOUT_DURATION)
+        await member.timeout(until_time, reason=reason)
+
+        embed = discord.Embed(
+            title="🚫 クソスパマーをブロックしました。",
+            description=f"{member.mention} を1時間タイムアウトしました\n理由: {reason}\n検知メッセージ: {content}",
+            color=0xff0000
+        )
+
+        class UnTimeoutView(View):
+            @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
+            async def untout(self, button, interaction):
+                if not is_admin(interaction.user):
+                    await interaction.response.send_message("❌ 権限なし", ephemeral=True)
+                    return
+                await member.remove_timeout()
+                await interaction.response.edit_message(content=f"{member.mention} のタイムアウトを解除しました", view=None)
+
+        await channel.send(embed=embed, view=UnTimeoutView())
+    except Exception as e:
+        print(f"[ERROR] ブロック失敗: {e}")
 
 # ==================== スラッシュコマンド ====================
 @bot.tree.command(name="ping", description="動作確認")
@@ -57,6 +84,13 @@ async def soviet_image(interaction: discord.Interaction):
     embed.set_image(url=url)
     await interaction.response.send_message(embed=embed)
 
+# ニュースコマンド（例としてGNEWS API使用）
+@bot.tree.command(name="ニュース", description="最新ニュース取得")
+async def news_command(interaction: discord.Interaction):
+    # API呼び出しは省略、ダミーで返す
+    embed = discord.Embed(title="📰 最新ニュース", description="ここにニュースを表示", color=0x00ff00)
+    await interaction.response.send_message(embed=embed)
+
 @bot.tree.command(name="help", description="コマンド一覧")
 async def help_command(interaction: discord.Interaction):
     help_text = (
@@ -68,11 +102,11 @@ async def help_command(interaction: discord.Interaction):
         "/ロール削除 - 管理者: ユーザーからロール削除\n"
         "/ロール申請 - 希望ロールを申請\n"
         "/宣伝設置 - 管理者専用: 宣伝ボタン設置\n"
-        "!yaju - 任意メッセージの連投\n"
+        "!yaju - 任意メッセージの連投"
     )
     await interaction.response.send_message(help_text, ephemeral=True)
 
-# ==================== 管理者 DM ====================
+# 管理者DM
 @bot.tree.command(name="dm", description="管理者: 指定ユーザーにDM送信")
 @app_commands.describe(user="送信先ユーザー", message="送信するメッセージ")
 async def dm_command(interaction: discord.Interaction, user: discord.User, message: str):
@@ -85,7 +119,7 @@ async def dm_command(interaction: discord.Interaction, user: discord.User, messa
     except discord.Forbidden:
         await interaction.response.send_message(f"❌ {user.display_name} にDM送信できません", ephemeral=True)
 
-# ==================== !yaju コマンド ====================
+# !yaju
 @bot.command(name="yaju")
 async def yaju(ctx, user: discord.User=None, count: int=1):
     content = "|||||"*10
@@ -99,93 +133,11 @@ async def yaju(ctx, user: discord.User=None, count: int=1):
     except discord.Forbidden:
         await ctx.send("❌ DM送信できません")
 
-# ==================== ロール付与/削除 ====================
-@app_commands.checks.has_permissions(manage_roles=True)
-@bot.tree.command(name="ロール付与", description="管理者: ユーザーにロール付与")
-@app_commands.describe(user="対象ユーザー", role="付与するロール")
-async def role_add(interaction: discord.Interaction, user: discord.Member, role: discord.Role):
-    try:
-        await user.add_roles(role)
-        await interaction.response.send_message(f"✅ {user.display_name} に {role.name} を付与")
-    except Exception as e:
-        await interaction.response.send_message(f"❌ 付与失敗: {e}")
-
-@app_commands.checks.has_permissions(manage_roles=True)
-@bot.tree.command(name="ロール削除", description="管理者: ユーザーからロール削除")
-@app_commands.describe(user="対象ユーザー", role="削除するロール")
-async def role_remove(interaction: discord.Interaction, user: discord.Member, role: discord.Role):
-    try:
-        await user.remove_roles(role)
-        await interaction.response.send_message(f"✅ {user.display_name} から {role.name} を削除")
-    except Exception as e:
-        await interaction.response.send_message(f"❌ 削除失敗: {e}")
-
-# ==================== ロール申請 ====================
-@bot.tree.command(name="ロール申請", description="希望ロールを申請")
-@app_commands.describe(role="希望ロール")
-async def role_request(interaction: discord.Interaction, role: discord.Role):
-    class RoleApproveView(View):
-        def __init__(self):
-            super().__init__(timeout=None)
-
-        @discord.ui.button(label="承認", style=discord.ButtonStyle.success)
-        async def approve(self, button, i: discord.Interaction):
-            if not is_admin(i.user):
-                await i.response.send_message("❌ 権限なし", ephemeral=True)
-                return
-            await interaction.user.add_roles(role)
-            await i.response.edit_message(content=f"✅ {interaction.user.display_name} に {role.name} 付与済", view=None)
-            self.stop()
-
-        @discord.ui.button(label="拒否", style=discord.ButtonStyle.danger)
-        async def reject(self, button, i: discord.Interaction):
-            if not is_admin(i.user):
-                await i.response.send_message("❌ 権限なし", ephemeral=True)
-                return
-            await i.response.edit_message(content=f"❌ {interaction.user.display_name} の申請拒否", view=None)
-            self.stop()
-
-    await interaction.response.send_message(f"{interaction.user.mention} が `{role.name}` を申請", view=RoleApproveView())
-
-# ==================== 宣伝ボタン設置 ====================
-@bot.tree.command(name="宣伝設置", description="管理者: 宣伝ボタン設置")
-@app_commands.describe(channel="宣伝送信先チャンネル", log_channel="ログチャンネル")
-async def setup_promo(interaction: discord.Interaction, channel: discord.TextChannel, log_channel: discord.TextChannel):
-    if not is_admin(interaction.user):
-        await interaction.response.send_message("❌ 権限なし", ephemeral=True)
-        return
-
-    class PromoView(View):
-        @discord.ui.button(label="宣伝送信", style=discord.ButtonStyle.primary)
-        async def promo(self, button, i: discord.Interaction):
-            # 入力欄モーダル
-            class PromoModal(Modal, title="宣伝内容入力"):
-                content_input = TextInput(label="宣伝内容", style=discord.TextStyle.paragraph)
-
-                async def on_submit(self, modal_interaction: discord.Interaction):
-                    await channel.send(self.content_input.value)
-                    await log_channel.send(f"📢 {modal_interaction.user} が宣伝送信")
-                    await modal_interaction.response.send_message("✅ 宣伝送信完了", ephemeral=True)
-
-            await i.response.send_modal(PromoModal())
-
-    await interaction.response.send_message(f"{channel.mention} に宣伝ボタン設置完了", view=PromoView())
-
 # ==================== メッセージ監視 ====================
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
-
-    # 自動応答
-    if "MURさん 夜中腹減んないすか？" in message.content:
-        await message.channel.send(f"{message.author.mention} 腹減ったなぁ")
-
-    if "ソ連画像" in message.content:
-        url = random.choice(SOVIET_IMAGES)
-        embed = discord.Embed(title="🇷🇺 ソビエト画像", color=0xff0000)
-        embed.set_image(url=url)
-        await message.channel.send(embed=embed)
 
     # スパム監視
     now = time.time()
@@ -194,55 +146,21 @@ async def on_message(message):
     user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
     user_messages[uid].append(now)
 
-    long_text_spam = len(message.content) >= LONG_TEXT_LENGTH
+    long_text_spam = len(message.content) >= LONG_TEXT_THRESHOLD
 
     if len(user_messages[uid]) >= SPAM_COUNT or long_text_spam or any(x in message.content for x in ["discord.gg", "bit.ly", "tinyurl.com"]):
-        if not is_admin(message.author):
-            try:
-                await message.delete()
-                embed = discord.Embed(
-                    title="🚫 クソスパマーをブロックしました。",
-                    description=f"{message.author.mention} を1時間タイムアウトしました\n理由: スパム・長文・不審リンク\n検知メッセージ: {message.content}",
-                    color=0xff0000
-                )
-                until_time = datetime.now(timezone.utc) + timedelta(seconds=TIMEOUT_DURATION)
-                await message.author.timeout(until_time, reason="スパム・不審リンク")
-
-                # タイムアウト解除ボタン（管理者のみ）
-                class UnTimeoutView(View):
-                    @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
-                    async def untout(self, button, i: discord.Interaction):
-                        if not is_admin(i.user):
-                            await i.response.send_message("❌ 権限なし", ephemeral=True)
-                            return
-                        await message.author.remove_timeout()
-                        await i.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
-
-                await message.channel.send(embed=embed, view=UnTimeoutView())
-
-            except Exception as e:
-                print(f"[ERROR] ブロック失敗: {e}")
+        await message.delete()
+        reason = "短時間連投" if len(user_messages[uid]) >= SPAM_COUNT else ("長文" if long_text_spam else "不審リンク")
+        await timeout_member(message.author, reason, message.channel, message.content)
+        return
 
     await bot.process_commands(message)
-
-# ==================== ニュース取得 ====================
-@bot.tree.command(name="ニュース", description="最新ニュース取得")
-async def news_command(interaction: discord.Interaction):
-    url = f"https://gnews.io/api/v4/top-headlines?token={GNEWS_API_KEY}&lang=ja&max=5"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            data = await resp.json()
-            if "articles" in data:
-                for art in data["articles"]:
-                    embed = discord.Embed(title=art["title"], url=art["url"], description=art.get("description", ""), color=0x00ff00)
-                    await interaction.channel.send(embed=embed)
-            else:
-                await interaction.response.send_message("ニュース取得に失敗しました", ephemeral=True)
 
 # ==================== 起動 ====================
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
+    guild = discord.Object(id=GUILD_ID)
+    await bot.tree.sync(guild=guild)
     print(f"Logged in as {bot.user} — READY")
 
 bot.run(TOKEN)
