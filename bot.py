@@ -17,31 +17,28 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# =====================================================
-# JSONファイル読み込み（ratio.json）
-# =====================================================
-RATIO_JSON = "ratio.json"
-ratio_data = {}
-if os.path.exists(RATIO_JSON):
-    if os.path.getsize(RATIO_JSON) > 0:
-        with open(RATIO_JSON, encoding="utf-8") as f:
-            ratio_data = json.load(f)
-    else:
-        ratio_data = {}
-else:
-    ratio_data = {}
-
-# =====================================================
-# CSVファイル読み込み（goroku.csv）
-# =====================================================
 GOROKU_CSV = "goroku.csv"
+RATIO_JSON = "ratio.json"
+
+# =============================
+# goroku.csv 読み込み
+# =============================
 goroku_list = []
 if os.path.exists(GOROKU_CSV):
-    with open(GOROKU_CSV, encoding="utf-8") as f:
-        reader = csv.reader(f)
+    with open(GOROKU_CSV, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
         for row in reader:
-            if len(row) >= 3:
-                goroku_list.append({"言葉": row[0], "名前": row[1], "意味": row[2]})
+            goroku_list.append(row)
+
+# ratio.json 読み込み
+if os.path.exists(RATIO_JSON):
+    with open(RATIO_JSON, "r", encoding="utf-8") as f:
+        try:
+            ratio_data = json.load(f)
+        except json.JSONDecodeError:
+            ratio_data = {}
+else:
+    ratio_data = {}
 
 # =====================================================
 # 起動時イベント
@@ -147,7 +144,7 @@ async def request_to_admin(interaction: discord.Interaction, message: str):
     if not guild:
         await interaction.response.send_message("❌ サーバー内でのみ使用可能です", ephemeral=True)
         return
-
+    
     admin_members = [m for m in guild.members if m.guild_permissions.administrator and not m.bot]
     if not admin_members:
         await interaction.response.send_message("❌ 管理者が見つかりません", ephemeral=True)
@@ -165,16 +162,16 @@ async def request_to_admin(interaction: discord.Interaction, message: str):
     await interaction.response.send_message(f"✅ {sent_count}人の管理者に要望を送信しました。", ephemeral=True)
 
 # =====================================================
-# /goroku
-# 淫夢語録をメッセージ回数と割合でランダム表示
+# /goroku コマンド
 # =====================================================
 @bot.tree.command(name="goroku", description="淫夢語録を送信します")
-@app_commands.describe(channel_id="対象チャンネルID", percentage="メッセージに応じて出す割合（%）")
-async def send_goroku(interaction: discord.Interaction, channel_id: int, percentage: int):
-    guild = interaction.guild
-    channel = guild.get_channel(channel_id)
-    if not channel:
-        await interaction.response.send_message("❌ チャンネルが見つかりません", ephemeral=True)
+@app_commands.describe(
+    channel="対象チャンネル",
+    percentage="メッセージに応じて出す割合（%）"
+)
+async def send_goroku(interaction: discord.Interaction, channel: discord.TextChannel, percentage: int):
+    if not goroku_list:
+        await interaction.response.send_message("❌ goroku.csv が読み込まれていません。", ephemeral=True)
         return
 
     # メッセージ回数取得
@@ -182,18 +179,15 @@ async def send_goroku(interaction: discord.Interaction, channel_id: int, percent
     async for _ in channel.history(limit=None):
         count += 1
 
-    # ratio_data の更新
-    if str(channel_id) not in ratio_data:
-        ratio_data[str(channel_id)] = 0
-    ratio_data[str(channel_id)] += count
+    # ratio_data 更新
+    if str(channel.id) not in ratio_data:
+        ratio_data[str(channel.id)] = 0
+    ratio_data[str(channel.id)] += count
 
-    # 確率で出すか判定
+    # 確率判定
     if random.randint(1, 100) <= percentage:
-        if goroku_list:
-            entry = random.choice(goroku_list)
-            await channel.send(f"{entry['言葉']} — {entry['名前']} ({entry['意味']})")
-        else:
-            await channel.send("❌ goroku.csv が読み込まれていません。")
+        entry = random.choice(goroku_list)
+        await channel.send(f"{entry['言葉']} — {entry['名前']} ({entry['意味']})")
     else:
         await channel.send("今回は語録を送信しませんでした。")
 
@@ -201,8 +195,10 @@ async def send_goroku(interaction: discord.Interaction, channel_id: int, percent
     with open(RATIO_JSON, "w", encoding="utf-8") as f:
         json.dump(ratio_data, f, ensure_ascii=False, indent=4)
 
+    await interaction.response.send_message(f"✅ {channel.mention} に処理を実行しました。", ephemeral=True)
+
 # =====================================================
-# !yaju コマンド（従来のまま）
+# !yaju コマンド（従来通り）
 # =====================================================
 @bot.command()
 async def yaju(ctx, *, message: str = "やりますねぇ"):
