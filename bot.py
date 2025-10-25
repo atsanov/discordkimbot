@@ -23,7 +23,7 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ================================
-# ratio.json読み込み（空ファイル or 非存在時対応）
+# ratio.json読み込み
 # ================================
 ratio_data = {}
 if os.path.exists(RATIO_FILE):
@@ -39,7 +39,7 @@ if os.path.exists(RATIO_FILE):
         ratio_data = {}
 
 # ================================
-# goroku.csv読み込み（言葉・意味）
+# goroku.csv読み込み
 # ================================
 goroku_list = []
 if os.path.exists(GOROKU_FILE):
@@ -144,7 +144,7 @@ async def role_request(interaction: discord.Interaction, role_name: str):
     await interaction.response.send_message("✅ 申請を送信しました。", ephemeral=True)
 
 # =====================================================
-# /要望（新機能）
+# /要望
 # =====================================================
 @bot.tree.command(name="要望", description="管理者に要望を送信します")
 @app_commands.describe(message="送信したい要望内容")
@@ -168,7 +168,7 @@ async def request_to_admin(interaction: discord.Interaction, message: str):
     await interaction.response.send_message(f"✅ {sent_count}人の管理者に要望を送信しました。", ephemeral=True)
 
 # =====================================================
-# !yaju コマンド（そのまま残す）
+# !yaju コマンド
 # =====================================================
 @bot.command()
 async def yaju(ctx, *, message: str = "やりますねぇ"):
@@ -176,12 +176,11 @@ async def yaju(ctx, *, message: str = "やりますねぇ"):
         await ctx.send(message)
 
 # =====================================================
-# /goroku コマンド（淫夢語録埋め込み・意味付き）
+# /goroku コマンド（淫夢語録）
 # =====================================================
 @bot.tree.command(name="goroku", description="淫夢語録を送信します")
 @app_commands.describe(channel="投稿先チャンネル（#チャンネル名形式）", ratio="送信割合（整数％）")
 async def send_goroku(interaction: discord.Interaction, channel: str, ratio: int = 100):
-    # チャンネル取得
     if not interaction.guild:
         await interaction.response.send_message("❌ サーバー内で使用してください", ephemeral=True)
         return
@@ -193,13 +192,10 @@ async def send_goroku(interaction: discord.Interaction, channel: str, ratio: int
     if not dest_channel:
         await interaction.response.send_message(f"❌ チャンネル「{channel}」が見つかりません", ephemeral=True)
         return
-
-    # ratioチェック
     if ratio < 0 or ratio > 100:
         await interaction.response.send_message("❌ 送信割合は0〜100の整数で指定してください", ephemeral=True)
         return
 
-    # 送信
     messages_sent = 0
     for entry in goroku_list:
         if random.randint(1, 100) <= ratio:
@@ -210,19 +206,21 @@ async def send_goroku(interaction: discord.Interaction, channel: str, ratio: int
     await interaction.response.send_message(f"✅ {messages_sent}件の淫夢語録を送信しました", ephemeral=True)
 
 # =====================================================
-# /goroku辞典（全表示）
+# /goroku_dict コマンド（安全版辞典）
 # =====================================================
-@bot.tree.command(name="goroku_dict", description="淫夢語録辞典を表示します")
+@bot.tree.command(name="goroku_dict", description="淫夢語録辞典を表示します（安全版）")
 async def goroku_dict(interaction: discord.Interaction):
     if not goroku_list:
         await interaction.response.send_message("❌ 読み込める語録がありません", ephemeral=True)
         return
+
+    # 最大10件までまとめて送信（レート制限回避）
     embeds = []
-    for entry in goroku_list:
+    for entry in goroku_list[:10]:
         embed = discord.Embed(title=entry["word"], description=entry["meaning"], color=0xFF69B4)
         embeds.append(embed)
-    for embed in embeds:
-        await interaction.response.send_message(embed=embed)
+
+    await interaction.response.send_message(content=f"📘 語録辞典（全{len(goroku_list)}件中、先頭10件）", embeds=embeds)
 
 # =====================================================
 # 実行
