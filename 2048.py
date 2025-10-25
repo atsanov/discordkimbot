@@ -1,188 +1,194 @@
+import os
+import random
 import discord
 from discord.ext import commands
-from discord import app_commands
-import random
+from discord import app_commands, ui
+from datetime import datetime, timedelta, timezone
+import aiohttp
+import asyncio
+from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont
 import io
+import time
 
-class Game2048(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        self.active_games = {}
+# ==================== 環境変数 ====================
+load_dotenv()
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
 
-    # 🎮 盤面生成
-    def new_board(self):
-        board = [[0]*4 for _ in range(4)]
-        self.add_tile(board)
-        self.add_tile(board)
-        return board
+# ==================== Bot 初期化 ====================
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-    # ➕ 新しいタイルを追加
-    def add_tile(self, board):
-        empty = [(r, c) for r in range(4) for c in range(4) if board[r][c] == 0]
-        if not empty:
-            return
-        r, c = random.choice(empty)
-        board[r][c] = random.choice([2, 4])
+# ==================== 設定 ====================
+SPAM_THRESHOLD = 30       # 秒
+SPAM_COUNT = 6
+LONG_TEXT_LIMIT = 1500    # 文字
+TIMEOUT_DURATION = 3600   # 秒
+user_messages = {}
 
-    # 🔄 動作ロジック
-    def compress(self, row):
-        new_row = [i for i in row if i != 0]
-        new_row += [0] * (4 - len(new_row))
-        return new_row
+SOVIET_IMAGES = [
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Lenin_in_1920_%28cropped%29.jpg/120px-Lenin_in_1920_%28cropped%29.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/StalinCropped1943.jpg/120px-StalinCropped1943.jpg"
+]
 
-    def merge(self, row):
-        for i in range(3):
-            if row[i] != 0 and row[i] == row[i+1]:
-                row[i] *= 2
-                row[i+1] = 0
-        return row
+GOROKU_LIST = [
+    {"word": "ｱｰｲｷｿ", "usage": "イキそうな時に", "note": "半角で表記"},
+    {"word": "あーソレいいよ", "usage": "賛辞を贈る際に", "note": ""},
+    {"word": "暴れんなよ…暴れんなよ…", "usage": "暴れてる相手を制止したい時", "note": ""}
+]
 
-    def move_left(self, board):
-        new_board = []
-        for row in board:
-            row = self.compress(row)
-            row = self.merge(row)
-            row = self.compress(row)
-            new_board.append(row)
-        return new_board
+def is_admin(user: discord.Member):
+    return user.guild_permissions.administrator or user.guild_permissions.manage_roles
 
-    def reverse(self, board):
-        return [list(reversed(row)) for row in board]
+# ==================== 起動 ====================
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user}")
+    try:
+        await bot.tree.sync()
+        print("✅ Slash commands synced")
+    except Exception as e:
+        print(f"❌ Sync failed: {e}")
 
-    def transpose(self, board):
-        return [list(row) for row in zip(*board)]
+# ==================== スラッシュコマンド ====================
+@bot.tree.command(name="ping", description="Botの応答確認")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message(f"🏓 Pong! {round(bot.latency*1000)}ms")
 
-    def move_right(self, board):
-        reversed_board = self.reverse(board)
-        moved = self.move_left(reversed_board)
-        return self.reverse(moved)
+@bot.tree.command(name="画像", description="ソ連画像をランダム表示")
+async def soviet(interaction: discord.Interaction):
+    url = random.choice(SOVIET_IMAGES)
+    embed = discord.Embed(title="🇷🇺 ソビエト画像", color=0xff0000)
+    embed.set_image(url=url)
+    await interaction.response.send_message(embed=embed)
 
-    def move_up(self, board):
-        transposed = self.transpose(board)
-        moved = self.move_left(transposed)
-        return self.transpose(moved)
+@bot.tree.command(name="goroku", description="淫夢語録をランダム表示")
+async def goroku(interaction: discord.Interaction):
+    entry = random.choice(GOROKU_LIST)
+    embed = discord.Embed(title=entry["word"], description=f"使用: {entry['usage']}\n備考: {entry['note']}", color=0x00FF00)
+    await interaction.response.send_message(embed=embed)
 
-    def move_down(self, board):
-        transposed = self.transpose(board)
-        moved = self.move_right(transposed)
-        return self.transpose(moved)
-
-    # 🧠 Game Over 判定
-    def is_game_over(self, board):
-        for r in range(4):
-            for c in range(4):
-                if board[r][c] == 0:
-                    return False
-                if c < 3 and board[r][c] == board[r][c+1]:
-                    return False
-                if r < 3 and board[r][c] == board[r+1][c]:
-                    return False
-        return True
-
-    # 🖼 盤面画像生成
-    def render_board_image(self, board):
-        tile_colors = {
-            0:(204,192,179), 2:(238,228,218), 4:(237,224,200), 8:(242,177,121),
-            16:(245,149,99), 32:(246,124,95), 64:(246,94,59), 128:(237,207,114),
-            256:(237,204,97), 512:(237,200,80), 1024:(237,197,63), 2048:(237,194,46)
-        }
-
-        img = Image.new("RGB", (400, 400), (187,173,160))
-        draw = ImageDraw.Draw(img)
-        try:
-            font = ImageFont.truetype("arial.ttf", 36)
-        except:
-            font = ImageFont.load_default()
-
-        for r in range(4):
-            for c in range(4):
-                val = board[r][c]
-                color = tile_colors.get(val, (60,58,50))
-                x, y = c * 100 + 10, r * 100 + 10
-                draw.rounded_rectangle([x, y, x + 80, y + 80], 8, fill=color)
-                if val:
-                    text = str(val)
-                    w, h = draw.textsize(text, font=font)
-                    draw.text((x + 40 - w/2, y + 40 - h/2), text, fill=(0,0,0), font=font)
-
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
-        buffer.seek(0)
-        return discord.File(buffer, filename="board.png")
-
-    # 🔹 UI更新
-    async def update_message(self, interaction, user_id):
-        board = self.active_games[user_id]["board"]
-        score = sum(sum(row) for row in board)
-        file = self.render_board_image(board)
-        embed = discord.Embed(title=f"🎮 2048", description=f"Score: **{score}**", color=0xFFD700)
-        await interaction.edit_original_response(embed=embed, attachments=[file], view=self.active_games[user_id]["view"])
-
-    # ▶️ コマンド開始
-    @app_commands.command(name="2048", description="2048ゲームを開始します")
-    async def start_game(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        if user_id in self.active_games:
-            await interaction.response.send_message("⚠️ すでにゲーム中です！", ephemeral=True)
-            return
-
-        board = self.new_board()
-
-        # ボタンビュー
-        view = discord.ui.View(timeout=None)
-
-        async def move_callback(inter, direction):
-            if inter.user.id != user_id:
-                await inter.response.send_message("❌ 他人のゲームは操作できません。", ephemeral=True)
-                return
-
-            old_board = [row[:] for row in self.active_games[user_id]["board"]]
-            if direction == "up":
-                new_board = self.move_up(old_board)
-            elif direction == "down":
-                new_board = self.move_down(old_board)
-            elif direction == "left":
-                new_board = self.move_left(old_board)
-            elif direction == "right":
-                new_board = self.move_right(old_board)
-            else:
-                return
-
-            if new_board != old_board:
-                self.add_tile(new_board)
-            self.active_games[user_id]["board"] = new_board
-
-            # Game Over 判定
-            if self.is_game_over(new_board):
-                file = self.render_board_image(new_board)
-                score = sum(sum(row) for row in new_board)
-                embed = discord.Embed(title="💀 Game Over!", description=f"Score: **{score}**", color=0xFF0000)
-                await inter.response.edit_message(embed=embed, attachments=[file], view=None)
-                del self.active_games[user_id]
-                return
-
-            await self.update_message(inter, user_id)
-            await inter.response.defer()
-
-        directions = [("⬆️", "up"), ("⬇️", "down"), ("⬅️", "left"), ("➡️", "right"), ("🛑", "stop")]
-        for emoji, dir in directions:
-            button = discord.ui.Button(label=emoji, style=discord.ButtonStyle.primary)
-            async def callback(inter, d=dir):
-                if d == "stop":
-                    await inter.response.edit_message(content="🛑 ゲームを終了しました。", view=None)
-                    del self.active_games[user_id]
+@bot.tree.command(name="ニュース", description="最新ニュース取得")
+@app_commands.describe(キーワード="検索キーワード")
+async def news(interaction: discord.Interaction, キーワード: str = "Japan"):
+    await interaction.response.defer()
+    if not GNEWS_API_KEY:
+        await interaction.followup.send("❌ GNEWS_API_KEY が設定されていません。")
+        return
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://gnews.io/api/v4/search?q={キーワード}&lang=ja&max=3&apikey={GNEWS_API_KEY}"
+            ) as resp:
+                data = await resp.json()
+                if "articles" not in data or not data["articles"]:
+                    await interaction.followup.send("ニュースが見つかりませんでした。")
                     return
-                await move_callback(inter, d)
-            button.callback = callback
-            view.add_item(button)
+                embed = discord.Embed(title=f"📰 最新ニュース ({キーワード})", color=0x00AAFF)
+                for art in data["articles"]:
+                    embed.add_field(name=art["title"], value=art["url"], inline=False)
+                await interaction.followup.send(embed=embed)
+    except Exception as e:
+        await interaction.followup.send(f"❌ ニュース取得失敗: {e}")
 
-        self.active_games[user_id] = {"board": board, "view": view}
+@bot.tree.command(name="dm", description="管理者専用DM送信")
+@app_commands.describe(user="送信先ユーザー", message="送信内容")
+async def dm(interaction: discord.Interaction, user: discord.User, message: str):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message("❌ 管理者専用です", ephemeral=True)
+        return
+    try:
+        await user.send(message)
+        await interaction.response.send_message(f"✅ {user} に送信しました", ephemeral=True)
+    except:
+        await interaction.response.send_message("❌ DM送信失敗", ephemeral=True)
 
-        file = self.render_board_image(board)
-        embed = discord.Embed(title="🎮 2048", description="タイルを動かして2048を目指そう！", color=0x00FFAA)
-        await interaction.response.send_message(embed=embed, file=file, view=view)
+# ==================== スパム監視 ====================
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
 
-# 🔹 Cog登録
-async def setup(bot):
-    await bot.add_cog(Game2048(bot))
+    now = time.time()
+    uid = message.author.id
+    user_messages.setdefault(uid, [])
+    user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
+    user_messages[uid].append(now)
+
+    is_spam = len(user_messages[uid]) >= SPAM_COUNT or len(message.content) > LONG_TEXT_LIMIT
+
+    if is_spam or any(x in message.content for x in ["discord.gg", "bit.ly", "tinyurl.com"]):
+        if not is_admin(message.author):
+            try:
+                await message.delete()
+                until_time = datetime.now(timezone.utc) + timedelta(seconds=TIMEOUT_DURATION)
+                await message.author.timeout(until_time, reason="スパム・リンク・長文")
+                await message.channel.send(f"🚫 {message.author.mention} を1時間タイムアウトしました。")
+            except Exception as e:
+                print(f"[ERROR] タイムアウト失敗: {e}")
+
+    await bot.process_commands(message)
+
+# ==================== !yaju ====================
+@bot.command(name="yaju")
+async def yaju(ctx, *, message: str = "やりますねぇ"):
+    for _ in range(5):
+        await ctx.send(message)
+
+# ==================== 2048ゲーム ====================
+class Game2048View(ui.View):
+    def __init__(self, board=None):
+        super().__init__(timeout=None)
+        self.board = board or [[0]*4 for _ in range(4)]
+        self.add_random()
+        self.add_random()
+
+    def add_random(self):
+        empty = [(r,c) for r in range(4) for c in range(4) if self.board[r][c]==0]
+        if empty:
+            r,c = random.choice(empty)
+            self.board[r][c] = random.choice([2,4])
+
+    def board_image(self):
+        img = Image.new("RGB",(400,400),(250,248,239))
+        draw = ImageDraw.Draw(img)
+        font = ImageFont.load_default()
+        for r in range(4):
+            for c in range(4):
+                val = self.board[r][c]
+                color = (200,200,200) if val==0 else (255-10*val,255-5*val,200)
+                draw.rectangle([c*100,r*100,(c+1)*100,(r+1)*100], fill=color)
+                if val:
+                    w,h = draw.textsize(str(val),font=font)
+                    draw.text((c*100+50-w/2,r*100+50-h/2),str(val),fill=(0,0,0),font=font)
+        buf = io.BytesIO()
+        img.save(buf,format="PNG")
+        buf.seek(0)
+        return buf
+
+    async def update_message(self, interaction):
+        self.add_random()
+        img = self.board_image()
+        file = discord.File(img,filename="board.png")
+        embed = discord.Embed(title="2048ゲーム",color=0x00ff00)
+        embed.set_image(url="attachment://board.png")
+        await interaction.response.edit_message(embed=embed,attachments=[file],view=self)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return True  # 全員操作可能
+
+# スラッシュ開始コマンド
+@bot.tree.command(name="2048", description="2048ゲームを開始")
+async def start_2048(interaction: discord.Interaction):
+    view = Game2048View()
+    img = view.board_image()
+    file = discord.File(img,filename="board.png")
+    embed = discord.Embed(title="2048ゲーム", color=0x00ff00)
+    embed.set_image(url="attachment://board.png")
+    await interaction.response.send_message(embed=embed, file=file, view=view)
+
+# ==================== 実行 ====================
+bot.run(TOKEN)
