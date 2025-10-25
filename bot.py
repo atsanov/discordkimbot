@@ -1,217 +1,203 @@
-import discord
-from discord import app_commands
-from discord.ext import commands
 import os
 import random
+import time
+import discord
+from discord.ext import commands
+from discord import app_commands
+from discord.ui import View, Modal, TextInput
+from datetime import datetime, timedelta, timezone
 import aiohttp
 import csv
-import json
 from dotenv import load_dotenv
 
+# ==================== 環境変数 ====================
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", 0))
+NUKE_LOG_CHANNEL_ID = int(os.getenv("NUKE_LOG_CHANNEL_ID", 0))
 
-GOROKU_FILE = "goroku.csv"
-RATIO_FILE = "ratio.json"
+if not TOKEN:
+    raise ValueError("❌ 必須環境変数が設定されていません")
 
+# ==================== Bot 初期化 ====================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# =====================================================
-# ratio.json 読み込み
-# =====================================================
-ratio_data = {}
-if os.path.exists(RATIO_FILE):
-    try:
-        with open(RATIO_FILE, encoding="utf-8") as f:
-            content = f.read().strip()
-            ratio_data = json.loads(content) if content else {}
-    except json.JSONDecodeError:
-        print("⚠ ratio.jsonが壊れています。空で続行。")
-        ratio_data = {}
+# ==================== スパム管理 ====================
+user_messages = {}
+SPAM_THRESHOLD = 30
+SPAM_COUNT = 6
+LONG_TEXT_LIMIT = 1500
+TIMEOUT_DURATION = 3600  # 秒
 
-# =====================================================
-# goroku.csv 読み込み（言葉・意味）
-# =====================================================
+# ==================== ソ連画像 ====================
+SOVIET_IMAGES = [
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Lenin_in_1920_%28cropped%29.jpg/120px-Lenin_in_1920_%28cropped%29.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/StalinCropped1943.jpg/120px-StalinCropped1943.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/4/42/Georgy_Malenkov_1964.jpg/120px-Georgy_Malenkov_1964.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Bundesarchiv_Bild_183-B0628-0015-035%2C_Nikita_S._Chruschtschow.jpg/120px-Bundesarchiv_Bild_183-B0628-0015-035%2C_Nikita_S._Chruschtschow.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/Leonid_Brezjnev%2C_leider_van_de_Sovjet-Unie%2C_Bestanddeelnr_925-6564.jpg/120px-Leonid_Brezjnev%2C_leider_van_de_Sovjet-Unie%2C_Bestanddeelnr_925-6564.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/1/12/ANDROPOV1980S.jpg/120px-ANDROPOV1980S.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/Konstantin_Ustinovi%C4%8D_%C4%8Cern%C4%9Bnko%2C_1973.jpg/120px-Konstantin_Ustinovi%C4%8D_%C4%8Cern%C4%9Bnko%2C_1973.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Mikhail_Gorbachev_in_the_White_House_Library_Library_%28cropped%29.jpg/120px-Mikhail_Gorbachev_in_the_White_House_Library_Library_%28cropped%29.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7e/Yuri_Andropov.jpg/120px-Yuri_Andropov.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/Kosygin_1970.jpg/120px-Kosygin_1970.jpg"
+]
+
+# ==================== CSV 読み込み ====================
+GOROKU_FILE = "goroku.csv"
 goroku_list = []
+
 if os.path.exists(GOROKU_FILE):
     with open(GOROKU_FILE, encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            if "言葉" in row and "意味" in row and row["言葉"] and row["意味"]:
-                goroku_list.append({"word": row["言葉"], "meaning": row["意味"]})
+            if row.get("語録") and row.get("使用方法"):
+                goroku_list.append({
+                    "word": row["語録"],
+                    "usage": row["使用方法"],
+                    "note": row.get("備考","")
+                })
+else:
+    print("⚠ goroku.csv が存在しません。")
+
+# ==================== ユーティリティ ====================
+def is_admin(user: discord.Member):
+    return user.guild_permissions.administrator or user.guild_permissions.manage_roles
 
 # =====================================================
-# 起動
+# 起動時イベント
 # =====================================================
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
+    print(f"Logged in as {bot.user} — READY")
     try:
         synced = await bot.tree.sync()
-        print(f"✅ {len(synced)}個のコマンドを同期しました")
+        print(f"✅ Slash commands synced: {len(synced)}")
     except Exception as e:
         print(f"❌ Sync failed: {e}")
 
-# =====================================================
-# /ping
-# =====================================================
+# ==================== スラッシュコマンド ====================
 @bot.tree.command(name="ping", description="Botの応答速度を確認します")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message(f"🏓 Pong! {round(bot.latency * 1000)}ms")
 
-# =====================================================
-# /画像（変更禁止）
-# =====================================================
 @bot.tree.command(name="画像", description="ソ連の画像をランダム表示")
 async def soviet_image(interaction: discord.Interaction):
-    images = [
-        "https://upload.wikimedia.org/wikipedia/commons/9/9b/Flag_of_the_Soviet_Union.svg",
-        "https://upload.wikimedia.org/wikipedia/commons/3/3e/Lenin_Square_Minsk.jpg",
-        "https://upload.wikimedia.org/wikipedia/commons/1/17/RedSquare_Moscow.jpg"
-    ]
-    await interaction.response.send_message(random.choice(images))
+    url = random.choice(SOVIET_IMAGES)
+    embed = discord.Embed(title="🇷🇺 ソビエト画像", color=0xff0000)
+    embed.set_image(url=url)
+    await interaction.response.send_message(embed=embed)
 
-# =====================================================
-# /ニュース（GNEWS API）
-# =====================================================
-@bot.tree.command(name="ニュース", description="最新ニュースを取得します")
-async def news(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"https://gnews.io/api/v4/top-headlines?lang=ja&country=jp&max=3&apikey={GNEWS_API_KEY}"
-            ) as resp:
-                data = await resp.json()
-                if "articles" not in data:
-                    await interaction.followup.send("❌ ニュースを取得できませんでした。")
-                    return
+@bot.tree.command(name="help", description="コマンド一覧")
+async def help_command(interaction: discord.Interaction):
+    help_text = (
+        "/ping - 動作確認\n"
+        "/画像 - ソ連画像をランダム表示\n"
+        "/ニュース - 最新ニュース取得\n"
+        "/dm - 管理者専用DM送信\n"
+        "/goroku - 管理者専用: 語録一覧\n"
+        "/ロール付与 - 管理者: ユーザーにロール付与\n"
+        "/ロール削除 - 管理者: ユーザーからロール削除\n"
+        "/ロール申請 - 希望ロールを申請\n"
+        "/宣伝設置 - 管理者専用: 宣伝ボタン設置\n"
+        "!yaju - 任意メッセージの連投\n"
+    )
+    await interaction.response.send_message(help_text, ephemeral=True)
 
-                msg = "\n\n".join([
-                    f"📰 **{a['title']}**\n{a.get('url','')}" for a in data["articles"]
-                ])
-                await interaction.followup.send(msg)
-    except Exception as e:
-        await interaction.followup.send(f"❌ ニュース取得失敗: {e}")
-
-# =====================================================
-# /dm 管理者専用
-# =====================================================
-@bot.tree.command(name="dm", description="管理者専用: ユーザーにDMを送信します")
-@app_commands.checks.has_permissions(administrator=True)
-async def admin_dm(interaction: discord.Interaction, user: discord.User, message: str):
-    try:
-        await user.send(f"📩 管理者からのメッセージ:\n{message}")
-        await interaction.response.send_message("✅ DMを送信しました。", ephemeral=True)
-    except Exception:
-        await interaction.response.send_message("❌ DM送信に失敗しました。", ephemeral=True)
-
-# =====================================================
-# /ロール申請
-# =====================================================
-@bot.tree.command(name="ロール申請", description="希望ロールを申請します")
-async def role_request(interaction: discord.Interaction, role_name: str):
-    guild = interaction.guild
-    if not guild:
-        await interaction.response.send_message("❌ サーバー内で使用してください", ephemeral=True)
-        return
-    admins = [m for m in guild.members if m.guild_permissions.administrator]
-    for admin in admins:
-        try:
-            await admin.send(f"📩 {interaction.user} がロール「{role_name}」を申請しました。")
-        except:
-            pass
-    await interaction.response.send_message("✅ 管理者に申請を送信しました。", ephemeral=True)
-
-# =====================================================
-# !yaju
-# =====================================================
-@bot.command()
-async def yaju(ctx, *, message: str = "やりますねぇ"):
-    for _ in range(5):
-        await ctx.send(message)
-
-# =====================================================
-# /goroku（淫夢語録送信）
-# =====================================================
-@bot.tree.command(name="goroku", description="淫夢語録を指定チャンネルに送信します")
-@app_commands.describe(channel="投稿先チャンネル（<#チャンネルID>形式）", ratio="送信割合（0〜100）")
-async def send_goroku(interaction: discord.Interaction, channel: str, ratio: int = 100):
-    if not interaction.guild:
-        await interaction.response.send_message("❌ サーバー内で使用してください", ephemeral=True)
+# ==================== 管理者専用語録表示 ====================
+@bot.tree.command(name="goroku", description="管理者専用: 語録一覧を表示")
+async def goroku_command(interaction: discord.Interaction):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message("❌ 権限がありません", ephemeral=True)
         return
 
-    try:
-        channel_id = int(channel.strip("<#>"))
-        dest_channel = bot.get_channel(channel_id)
-        if not dest_channel:
-            await interaction.response.send_message("❌ チャンネルが見つかりません", ephemeral=True)
-            return
-    except ValueError:
-        await interaction.response.send_message("❌ <#チャンネルID> の形式で指定してください", ephemeral=True)
-        return
-
-    if ratio < 0 or ratio > 100:
-        await interaction.response.send_message("❌ 送信割合は0〜100で指定してください", ephemeral=True)
-        return
-
-    messages_sent = 0
-    for entry in goroku_list:
-        if random.randint(1, 100) <= ratio:
-            embed = discord.Embed(title=entry["word"], description=entry["meaning"], color=0xFF69B4)
-            await dest_channel.send(embed=embed)
-            messages_sent += 1
-
-    await interaction.response.send_message(f"✅ {messages_sent}件の淫夢語録を送信しました", ephemeral=True)
-
-# =====================================================
-# /goroku_dict（淫夢語録一覧）
-# =====================================================
-@bot.tree.command(name="goroku_dict", description="淫夢語録一覧を表示します")
-async def goroku_dict(interaction: discord.Interaction):
     if not goroku_list:
         await interaction.response.send_message("❌ 読み込める語録がありません", ephemeral=True)
         return
-    for entry in goroku_list:
-        embed = discord.Embed(title=entry["word"], description=entry["meaning"], color=0xFF69B4)
-        await interaction.response.send_message(embed=embed)
 
-# =====================================================
-# /help（コマンド一覧）
-# =====================================================
-@bot.tree.command(name="help", description="コマンド一覧を表示します")
-async def help_command(interaction: discord.Interaction):
-    embed = discord.Embed(title="📘 コマンド一覧", color=0x3498db)
-    embed.add_field(name="/ping", value="Botの応答速度を確認", inline=False)
-    embed.add_field(name="/画像", value="ソ連の画像をランダム表示", inline=False)
-    embed.add_field(name="/ニュース", value="最新ニュースを取得", inline=False)
-    embed.add_field(name="/goroku", value="淫夢語録を送信", inline=False)
-    embed.add_field(name="/goroku_dict", value="淫夢語録一覧を表示", inline=False)
-    embed.add_field(name="/dm", value="管理者専用: DM送信", inline=False)
-    embed.add_field(name="/ロール申請", value="希望ロールを申請", inline=False)
-    embed.add_field(name="!yaju", value="やりますねぇを連投", inline=False)
+    embed = discord.Embed(title="📜 淫夢語録一覧", color=0xFF69B4)
+    for entry in goroku_list:
+        embed.add_field(name=entry["word"], value=f"使用方法: {entry['usage']}\n備考: {entry['note']}", inline=False)
+
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# =====================================================
-# スパム・長文検知（クソスパマー排除）
-# =====================================================
+# ==================== ニュース ====================
+@bot.tree.command(name="ニュース", description="最新ニュースを取得")
+async def news(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    async with aiohttp.ClientSession() as session:
+        url = f"https://gnews.io/api/v4/top-headlines?token={GNEWS_API_KEY}&lang=ja&max=5"
+        try:
+            async with session.get(url) as resp:
+                data = await resp.json()
+                articles = data.get("articles", [])[:3]
+                if not articles:
+                    await interaction.followup.send("ニュースを取得できませんでした。")
+                    return
+                msg = "\n\n".join([f"📰 **{a.get('title','')}**\n{a.get('url','')}" for a in articles])
+                await interaction.followup.send(msg)
+        except Exception as e:
+            await interaction.followup.send(f"ニュース取得中にエラー: {e}")
+
+# ==================== メッセージ監視 ====================
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
-    if len(message.content) > 500 or message.content.count("\n") > 10:
-        try:
-            await message.author.ban(reason="クソスパマーをブロックしました")
-            await message.channel.send(f"🚫 クソスパマーをブロックしました: {message.author.mention}")
-        except:
-            await message.channel.send("⚠️ スパマーをブロックできませんでした（権限不足）")
+
+    # スパム・長文監視
+    now = time.time()
+    uid = message.author.id
+    user_messages.setdefault(uid, [])
+    user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
+    user_messages[uid].append(now)
+
+    is_spam = len(user_messages[uid]) >= SPAM_COUNT or len(message.content) > LONG_TEXT_LIMIT
+
+    if is_spam or any(x in message.content for x in ["discord.gg", "bit.ly", "tinyurl.com"]):
+        if not is_admin(message.author):
+            try:
+                await message.delete()
+                embed = discord.Embed(
+                    title="🚫 クソスパマーをブロックしました。",
+                    description=f"{message.author.mention} を1時間タイムアウトしました\n理由: {'長文' if len(message.content) > LONG_TEXT_LIMIT else 'スパム・不審リンク'}\n検知メッセージ: {message.content}",
+                    color=0xff0000
+                )
+                until_time = datetime.now(timezone.utc) + timedelta(seconds=TIMEOUT_DURATION)
+                await message.author.timeout(until_time, reason="スパム・不審リンク")
+
+                # タイムアウト解除ボタン
+                class UnTimeoutView(View):
+                    @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
+                    async def untout(self, button, interaction: discord.Interaction):
+                        if not is_admin(interaction.user):
+                            await interaction.response.send_message("❌ 権限なし", ephemeral=True)
+                            return
+                        await message.author.remove_timeout()
+                        await interaction.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
+
+                await message.channel.send(embed=embed, view=UnTimeoutView())
+
+                # ログ
+                if NUKE_LOG_CHANNEL_ID:
+                    log_ch = bot.get_channel(NUKE_LOG_CHANNEL_ID)
+                    if log_ch:
+                        await log_ch.send(f"{message.author} をタイムアウト: {message.content}")
+
+            except Exception as e:
+                print(f"[ERROR] ブロック失敗: {e}")
+
     await bot.process_commands(message)
 
-# =====================================================
-# 実行
-# =====================================================
+# ==================== !yaju コマンド ====================
+@bot.command(name="yaju")
+async def yaju(ctx, *, message: str = "やりますねぇ"):
+    for _ in range(5):
+        await ctx.send(message)
+
+# ==================== 起動 ====================
 bot.run(TOKEN)
