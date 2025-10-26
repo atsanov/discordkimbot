@@ -49,9 +49,6 @@ SOVIET_IMAGES = [
     "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/Kosygin_1970.jpg/120px-Kosygin_1970.jpg"
 ]
 
-# ==================== ユーティリティ ====================
-def is_admin(user: discord.Member):
-    return user.guild_permissions.administrator or user.guild_permissions.manage_roles
 
 # ==================== /help ====================
 @bot.tree.command(name="help", description="Botのコマンド一覧を表示します")
@@ -163,13 +160,16 @@ async def request_to_admin(interaction: discord.Interaction, message: str):
             continue
     await interaction.response.send_message(f"✅ {sent_count}人の管理者に要望を送信しました。", ephemeral=True)
 
-# ==================== 2048 Cog ====================
+# ==================== ユーティリティ ====================
+def is_admin(user: discord.Member):
+    return user.guild_permissions.administrator or user.guild_permissions.manage_roles
+
+# ==================== Cog 2048 ====================
 class Game2048(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.active_games = {}  # user_id: board
 
-    # ---------- 盤面生成 ----------
     def new_board(self):
         board = [[0]*4 for _ in range(4)]
         self.add_tile(board)
@@ -183,7 +183,6 @@ class Game2048(commands.Cog):
         r, c = random.choice(empty)
         board[r][c] = random.choice([2,4])
 
-    # ---------- 移動処理 ----------
     def compress(self, row):
         new_row = [i for i in row if i != 0]
         new_row += [0]*(4-len(new_row))
@@ -225,7 +224,6 @@ class Game2048(commands.Cog):
                     return False
         return True
 
-    # ---------- 画像描画 ----------
     def render_board_image(self, board):
         tile_colors = {0:(204,192,179),2:(238,228,218),4:(237,224,200),8:(242,177,121),
                        16:(245,149,99),32:(246,124,95),64:(246,94,59),128:(237,207,114),
@@ -251,14 +249,12 @@ class Game2048(commands.Cog):
         buffer.seek(0)
         return buffer
 
-    # ---------- 盤面送信 ----------
     async def send_board(self, ctx, board):
         img = self.render_board_image(board)
         file = discord.File(fp=img, filename="2048.png")
         msg = await ctx.send(file=file)
         return msg
 
-    # ---------- ゲーム開始 ----------
     @commands.hybrid_command(name="2048", description="2048ゲームを開始します")
     async def start_game(self, ctx):
         board = self.new_board()
@@ -306,6 +302,23 @@ class Game2048(commands.Cog):
 # ==================== Cog 登録 ====================
 async def setup_cogs():
     await bot.add_cog(Game2048(bot))
+
+# ==================== Bot 起動 ====================
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ Slash commands synced: {len(synced)}")
+    except Exception as e:
+        print(f"❌ Sync failed: {e}")
+
+async def main():
+    async with bot:
+        await setup_cogs()
+        await bot.start(TOKEN)
+
+asyncio.run(main())
 
 # ==================== !yaju ====================
 bot.remove_command("yaju")
