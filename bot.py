@@ -118,20 +118,23 @@ async def role_request(interaction: discord.Interaction, role_name: str):
             continue
     await interaction.response.send_message(f"✅ {sent_count}人の管理者に申請を送信しました。", ephemeral=True)
 
-# =====================================================
-# /dm
-# =====================================================
-@bot.tree.command(name="dm", description="管理者専用: 指定ユーザーにDMを送信")
+# ==================== /dm 復活 ====================
+@bot.tree.command(name="dm", description="管理者専用: 任意のユーザーにDMを送信します")
 @app_commands.describe(user="送信先ユーザー", message="送信するメッセージ")
 async def dm_command(interaction: discord.Interaction, user: discord.User, message: str):
+    # 管理者チェック
     if not is_admin(interaction.user):
         await interaction.response.send_message("❌ 管理者権限が必要です", ephemeral=True)
         return
+
     try:
-        await user.send(f"📩 管理者からのメッセージ:\n{message}")
-        await interaction.response.send_message("✅ 送信しました。", ephemeral=True)
-    except Exception:
-        await interaction.response.send_message("❌ 送信できませんでした。", ephemeral=True)
+        await user.send(f"📩 管理者 {interaction.user} からのメッセージ:\n```\n{message}\n```")
+        await interaction.response.send_message(f"✅ {user.mention} にDM送信しました。", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message(f"❌ {user.mention} にDMを送信できません。", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ 送信失敗: {e}", ephemeral=True)
+
 
 # ==================== /ping ====================
 @bot.tree.command(name="ping", description="Botの応答速度を確認します")
