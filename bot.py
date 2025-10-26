@@ -4,7 +4,7 @@ import time
 import discord
 from discord.ext import commands
 from discord import app_commands
-from discord.ui import View, Modal, TextInput
+from discord.ui import View
 from datetime import datetime, timedelta, timezone
 import aiohttp
 from dotenv import load_dotenv
@@ -53,16 +53,6 @@ SOVIET_IMAGES = [
 def is_admin(user: discord.Member):
     return user.guild_permissions.administrator or user.guild_permissions.manage_roles
 
-# ==================== 起動イベント ====================
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user} — READY")
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ Slash commands synced: {len(synced)}")
-    except Exception as e:
-        print(f"❌ Sync failed: {e}")
-
 # ==================== /help ====================
 @bot.tree.command(name="help", description="Botのコマンド一覧を表示します")
 async def help_command(interaction: discord.Interaction):
@@ -79,27 +69,21 @@ async def help_command(interaction: discord.Interaction):
     embed.set_footer(text="※Botの全機能を一覧で確認できます")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# =====================================================
-# /ロール付与
-# =====================================================
+# ==================== /ロール付与 ====================
 @bot.tree.command(name="ロール付与", description="管理者専用: ユーザーにロールを付与します")
 @app_commands.checks.has_permissions(administrator=True)
 async def add_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
     await member.add_roles(role)
     await interaction.response.send_message(f"✅ {member.mention} に {role.name} を付与しました。", ephemeral=True)
 
-# =====================================================
-# /ロール削除
-# =====================================================
+# ==================== /ロール削除 ====================
 @bot.tree.command(name="ロール削除", description="管理者専用: ユーザーからロールを削除します")
 @app_commands.checks.has_permissions(administrator=True)
 async def remove_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
     await member.remove_roles(role)
     await interaction.response.send_message(f"✅ {member.mention} から {role.name} を削除しました。", ephemeral=True)
 
-# =====================================================
-# /ロール申請
-# =====================================================
+# ==================== /ロール申請 ====================
 @bot.tree.command(name="ロール申請", description="希望するロールを申請します")
 async def role_request(interaction: discord.Interaction, role_name: str):
     guild = interaction.guild
@@ -107,7 +91,6 @@ async def role_request(interaction: discord.Interaction, role_name: str):
         await interaction.response.send_message("❌ サーバー内で使用してください", ephemeral=True)
         return
 
-    # 管理者に送信
     admin_members = [m for m in guild.members if is_admin(m) and not m.bot]
     sent_count = 0
     for admin in admin_members:
@@ -122,7 +105,6 @@ async def role_request(interaction: discord.Interaction, role_name: str):
 @bot.tree.command(name="dm", description="管理者専用: 任意のユーザーにDMを送信します")
 @app_commands.describe(user="送信先ユーザー", message="送信するメッセージ")
 async def dm_command(interaction: discord.Interaction, user: discord.User, message: str):
-    # 管理者チェック
     if not is_admin(interaction.user):
         await interaction.response.send_message("❌ 管理者権限が必要です", ephemeral=True)
         return
@@ -134,7 +116,6 @@ async def dm_command(interaction: discord.Interaction, user: discord.User, messa
         await interaction.response.send_message(f"❌ {user.mention} にDMを送信できません。", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ 送信失敗: {e}", ephemeral=True)
-
 
 # ==================== /ping ====================
 @bot.tree.command(name="ping", description="Botの応答速度を確認します")
@@ -182,6 +163,7 @@ async def request_to_admin(interaction: discord.Interaction, message: str):
             continue
     await interaction.response.send_message(f"✅ {sent_count}人の管理者に要望を送信しました。", ephemeral=True)
 
+# ==================== 2048 Cog ====================
 class Game2048(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -282,7 +264,6 @@ class Game2048(commands.Cog):
         board = self.new_board()
         self.active_games[ctx.author.id] = board
         msg = await self.send_board(ctx, board)
-        # リアクション追加
         for emoji in ["⬆️","⬇️","⬅️","➡️"]:
             await msg.add_reaction(emoji)
 
@@ -298,10 +279,7 @@ class Game2048(commands.Cog):
                 await msg.clear_reactions()
                 break
 
-            # 盤面コピー
             old_board = [row[:] for row in board]
-
-            # 移動
             if str(reaction.emoji) == "⬆️":
                 board = self.move_up(board)
             elif str(reaction.emoji) == "⬇️":
@@ -311,23 +289,21 @@ class Game2048(commands.Cog):
             elif str(reaction.emoji) == "➡️":
                 board = self.move_right(board)
 
-            # 新しいタイル追加
             if board != old_board:
                 self.add_tile(board)
 
-            # 盤面更新
             img = self.render_board_image(board)
             file = discord.File(fp=img, filename="2048.png")
             await msg.edit(content=None, attachments=[file])
             await msg.remove_reaction(reaction.emoji, user)
 
-            # ゲームオーバー判定
             if self.is_game_over(board):
                 await ctx.send(f"💀 ゲームオーバー！ {ctx.author.mention}")
                 del self.active_games[ctx.author.id]
                 await msg.clear_reactions()
                 break
-# ==================== 2048 Cog 登録 ====================
+
+# ==================== Cog 登録 ====================
 async def setup_cogs():
     await bot.add_cog(Game2048(bot))
 
@@ -368,39 +344,25 @@ async def on_message(message):
                 await message.delete()
                 embed = discord.Embed(
                     title="🚫 クソスパマーをブロックしました。",
-                    description=f"{message.author.mention} を1時間タイムアウトしました\n理由: {'長文' if len(message.content) > LONG_TEXT_LIMIT else 'スパム・不審リンク'}\n検知メッセージ: {message.content}",
+                    description=f"{message.author.mention} を1時間タイムアウトしました\n理由: {'長文' if len(message.content) > LONG_TEXT_LIMIT else 'スパム'}",
                     color=0xff0000
                 )
-                until_time = datetime.now(timezone.utc) + timedelta(seconds=TIMEOUT_DURATION)
-                await message.author.timeout(until_time, reason="スパム・不審リンク")
-
-                # タイムアウト解除ボタン（管理者のみ）
-                class UnTimeoutView(View):
-                    @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
-                    async def untout(self, button, interaction: discord.Interaction):
-                        if not is_admin(interaction.user):
-                            await interaction.response.send_message("❌ 権限なし", ephemeral=True)
-                            return
-                        await message.author.remove_timeout()
-                        await interaction.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
-
-                await message.channel.send(embed=embed, view=UnTimeoutView())
-
-                # ログ
-                if NUKE_LOG_CHANNEL_ID:
-                    log_ch = bot.get_channel(NUKE_LOG_CHANNEL_ID)
-                    if log_ch:
-                        await log_ch.send(f"{message.author} をタイムアウトしました。理由: {message.content}")
-
-            except Exception as e:
-                print(f"❌ タイムアウト処理失敗: {e}")
+                await message.channel.send(embed=embed)
+                await message.author.timeout(timedelta(seconds=TIMEOUT_DURATION))
+            except:
+                pass
 
     await bot.process_commands(message)
 
-# ==================== Bot起動 ====================
+# ==================== 起動 ====================
 async def main():
     async with bot:
         await setup_cogs()
+        try:
+            synced = await bot.tree.sync()
+            print(f"✅ Slash commands synced: {len(synced)}")
+        except Exception as e:
+            print(f"❌ Sync failed: {e}")
         await bot.start(TOKEN)
 
 asyncio.run(main())
