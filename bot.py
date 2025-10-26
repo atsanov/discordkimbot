@@ -10,6 +10,7 @@ import aiohttp
 from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont
 import io
+import asyncio
 
 # ==================== 環境変数 ====================
 load_dotenv()
@@ -77,53 +78,6 @@ async def help_command(interaction: discord.Interaction):
     embed.set_footer(text="※Botの全機能を一覧で確認できます")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ==================== ロール付与/削除 ====================
-@app_commands.checks.has_permissions(manage_roles=True)
-@bot.tree.command(name="ロール付与", description="管理者: ユーザーにロール付与")
-@app_commands.describe(user="対象ユーザー", role="付与するロール")
-async def role_add(interaction: discord.Interaction, user: discord.Member, role: discord.Role):
-    try:
-        await user.add_roles(role)
-        await interaction.response.send_message(f"✅ {user.display_name} に {role.name} を付与しました")
-    except Exception as e:
-        await interaction.response.send_message(f"❌ 付与失敗: {e}")
-
-@app_commands.checks.has_permissions(manage_roles=True)
-@bot.tree.command(name="ロール削除", description="管理者: ユーザーからロール削除")
-@app_commands.describe(user="対象ユーザー", role="削除するロール")
-async def role_remove(interaction: discord.Interaction, user: discord.Member, role: discord.Role):
-    try:
-        await user.remove_roles(role)
-        await interaction.response.send_message(f"✅ {user.display_name} から {role.name} を削除")
-    except Exception as e:
-        await interaction.response.send_message(f"❌ 削除失敗: {e}")
-
-# ==================== ロール申請 ====================
-@bot.tree.command(name="ロール申請", description="希望ロールを申請")
-@app_commands.describe(role="希望ロール")
-async def role_request(interaction: discord.Interaction, role: discord.Role):
-    class RoleRequestView(View):
-        def __init__(self):
-            super().__init__()
-
-        @discord.ui.button(label="承認", style=discord.ButtonStyle.success)
-        async def approve(self, button, i: discord.Interaction):
-            if not is_admin(i.user):
-                await i.response.send_message("❌ 権限がありません", ephemeral=True)
-                return
-            await interaction.user.add_roles(role)
-            await i.response.edit_message(content=f"✅ {interaction.user.display_name} に {role.name} 付与済", view=None)
-
-        @discord.ui.button(label="拒否", style=discord.ButtonStyle.danger)
-        async def reject(self, button, i: discord.Interaction):
-            if not is_admin(i.user):
-                await i.response.send_message("❌ 権限がありません", ephemeral=True)
-                return
-            await i.response.edit_message(content=f"❌ {interaction.user.display_name} の申請拒否", view=None)
-            self.stop()
-
-    await interaction.response.send_message(f"{interaction.user.mention} が {role.name} を申請しました", view=RoleRequestView())
-
 # ==================== /ping ====================
 @bot.tree.command(name="ping", description="Botの応答速度を確認します")
 async def ping(interaction: discord.Interaction):
@@ -160,7 +114,6 @@ async def request_to_admin(interaction: discord.Interaction, message: str):
     if not guild:
         await interaction.response.send_message("❌ サーバー内でのみ使用可能です", ephemeral=True)
         return
-
     admin_members = [m for m in guild.members if is_admin(m) and not m.bot]
     sent_count = 0
     for admin in admin_members:
@@ -169,54 +122,7 @@ async def request_to_admin(interaction: discord.Interaction, message: str):
             sent_count += 1
         except discord.Forbidden:
             continue
-
     await interaction.response.send_message(f"✅ {sent_count}人の管理者に要望を送信しました。", ephemeral=True)
-
-# ==================== 2048ゲーム Cog ====================
-class Game2048(commands.Cog):
-    # 省略（既存コードをそのまま使用可）
-    ...
-
-bot.add_cog(Game2048(bot))
-
-# ==================== !yaju ====================
-@bot.command()
-async def yaju(ctx, *, message: str = "|||||"*10):
-    for _ in range(5):
-        await ctx.send(message)
-
-# ==================== メッセージ監視 ====================
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    # 自動応答
-    if "MURさん 夜中腹減んないすか？" in message.content:
-        await message.channel.send(f"{message.author.mention} 腹減ったなぁ")
-    if "ソ連画像" in message.content:
-        url = random.choice(SOVIET_IMAGES)
-        embed = discord.Embed(title="🇷🇺 ソビエト画像", color=0xff0000)
-        embed.set_image(url=url)
-        await message.channel.send(embed=embed)
-
-    # スパム・長文監視
-    now = time.time()
-    uid = message.author.id
-    user_messages.setdefault(uid, [])
-    user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
-    user_messages[uid].append(now)
-
-    is_spam = len(user_messages[uid]) >= SPAM_COUNT or len(message.content) > LONG_TEXT_LIMIT
-    if is_spam and not is_admin(message.author):
-        try:
-            await message.delete()
-            until_time = datetime.now(timezone.utc) + timedelta(seconds=TIMEOUT_DURATION)
-            await message.author.timeout(until_time, reason="スパム・不審リンク")
-        except Exception as e:
-            print(f"[ERROR] タイムアウト失敗: {e}")
-
-    await bot.process_commands(message)
 
 # ==================== 2048ゲーム Cog ====================
 class Game2048(commands.Cog):
@@ -224,7 +130,7 @@ class Game2048(commands.Cog):
         self.bot = bot
         self.active_games = {}
 
-    # 盤面生成
+    # ---------- 盤面生成 ----------
     def new_board(self):
         board = [[0]*4 for _ in range(4)]
         self.add_tile(board)
@@ -238,6 +144,7 @@ class Game2048(commands.Cog):
         r, c = random.choice(empty)
         board[r][c] = random.choice([2,4])
 
+    # ---------- 移動処理 ----------
     def compress(self, row):
         new_row = [i for i in row if i != 0]
         new_row += [0]*(4-len(new_row))
@@ -251,13 +158,7 @@ class Game2048(commands.Cog):
         return row
 
     def move_left(self, board):
-        new_board = []
-        for row in board:
-            row = self.compress(row)
-            row = self.merge(row)
-            row = self.compress(row)
-            new_board.append(row)
-        return new_board
+        return [self.compress(self.merge(self.compress(row))) for row in board]
 
     def reverse(self, board):
         return [list(reversed(row)) for row in board]
@@ -285,6 +186,7 @@ class Game2048(commands.Cog):
                     return False
         return True
 
+    # ---------- 画像描画 ----------
     def render_board_image(self, board):
         tile_colors = {0:(204,192,179),2:(238,228,218),4:(237,224,200),8:(242,177,121),
                        16:(245,149,99),32:(246,124,95),64:(246,94,59),128:(237,207,114),
@@ -295,7 +197,6 @@ class Game2048(commands.Cog):
             font = ImageFont.truetype("arial.ttf",36)
         except:
             font = ImageFont.load_default()
-
         for r in range(4):
             for c in range(4):
                 val = board[r][c]
@@ -306,7 +207,6 @@ class Game2048(commands.Cog):
                     text=str(val)
                     w,h=draw.textsize(text,font=font)
                     draw.text((x+40-w/2, y+40-h/2), text, fill=(0,0,0), font=font)
-
         buffer = io.BytesIO()
         img.save(buffer,format="PNG")
         buffer.seek(0)
@@ -325,9 +225,12 @@ class Game2048(commands.Cog):
         await self.send_board(ctx, board)
         await ctx.send("⬆️⬇️⬅️➡️ のリアクションで移動してください。")
 
-bot.add_cog(Game2048(bot))
+# Cog 登録
+async def setup_cogs():
+    await bot.add_cog(Game2048(bot))
 
 # ==================== !yaju ====================
+bot.remove_command("yaju")
 @bot.command()
 async def yaju(ctx, *, message: str = "|||||"*10):
     for _ in range(5):
@@ -354,7 +257,6 @@ async def on_message(message):
     user_messages.setdefault(uid, [])
     user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
     user_messages[uid].append(now)
-
     is_spam = len(user_messages[uid]) >= SPAM_COUNT or len(message.content) > LONG_TEXT_LIMIT
     if is_spam and not is_admin(message.author):
         try:
@@ -367,4 +269,9 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # ==================== 実行 ====================
-bot.run(TOKEN)
+async def main():
+    async with bot:
+        await setup_cogs()
+        await bot.start(TOKEN)
+
+asyncio.run(main())
