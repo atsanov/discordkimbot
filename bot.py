@@ -75,6 +75,7 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(name="/ロール付与", value="ロールを付与します", inline=False)
     embed.add_field(name="/ロール削除", value="ロールを削除します", inline=False)
     embed.add_field(name="/ロール申請", value="ロールを申請します", inline=False)
+    embed.add_field(name="/dm", value="管理者専用: 指定ユーザーにDMを送信", inline=False)
     embed.set_footer(text="※Botの全機能を一覧で確認できます")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -105,13 +106,32 @@ async def role_request(interaction: discord.Interaction, role_name: str):
     if not guild:
         await interaction.response.send_message("❌ サーバー内で使用してください", ephemeral=True)
         return
-    try:
-        await user.send(message)
-        await user.send("||||"*10)
-        await interaction.response.send_message(f"✅ {user.display_name} にDM送信完了", ephemeral=True)
-    except discord.Forbidden:
-        await interaction.response.send_message(f"❌ {user.display_name} にDM送信できません", ephemeral=True)
 
+    # 管理者に送信
+    admin_members = [m for m in guild.members if is_admin(m) and not m.bot]
+    sent_count = 0
+    for admin in admin_members:
+        try:
+            await admin.send(f"📩 **{interaction.user}** がロールを申請しました: `{role_name}`")
+            sent_count += 1
+        except discord.Forbidden:
+            continue
+    await interaction.response.send_message(f"✅ {sent_count}人の管理者に申請を送信しました。", ephemeral=True)
+
+# =====================================================
+# /dm
+# =====================================================
+@bot.tree.command(name="dm", description="管理者専用: 指定ユーザーにDMを送信")
+@app_commands.describe(user="送信先ユーザー", message="送信するメッセージ")
+async def dm_command(interaction: discord.Interaction, user: discord.User, message: str):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message("❌ 管理者権限が必要です", ephemeral=True)
+        return
+    try:
+        await user.send(f"📩 管理者からのメッセージ:\n{message}")
+        await interaction.response.send_message("✅ 送信しました。", ephemeral=True)
+    except Exception:
+        await interaction.response.send_message("❌ 送信できませんでした。", ephemeral=True)
 
 # ==================== /ping ====================
 @bot.tree.command(name="ping", description="Botの応答速度を確認します")
@@ -159,11 +179,10 @@ async def request_to_admin(interaction: discord.Interaction, message: str):
             continue
     await interaction.response.send_message(f"✅ {sent_count}人の管理者に要望を送信しました。", ephemeral=True)
 
-# ==================== 2048ゲーム Cog ====================
 class Game2048(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.active_games = {}
+        self.active_games = {}  # user_id: board
 
     # ---------- 盤面生成 ----------
     def new_board(self):
@@ -247,27 +266,70 @@ class Game2048(commands.Cog):
         buffer.seek(0)
         return buffer
 
+    # ---------- 盤面送信 ----------
     async def send_board(self, ctx, board):
         img = self.render_board_image(board)
         file = discord.File(fp=img, filename="2048.png")
-        await ctx.send(file=file)
+        msg = await ctx.send(file=file)
+        return msg
 
+    # ---------- ゲーム開始 ----------
     @commands.hybrid_command(name="2048", description="2048ゲームを開始します")
     async def start_game(self, ctx):
         board = self.new_board()
-        user_id = ctx.author.id
-        self.active_games[user_id] = board
-        await self.send_board(ctx, board)
-        await ctx.send("⬆️⬇️⬅️➡️ のリアクションで移動してください。")
+        self.active_games[ctx.author.id] = board
+        msg = await self.send_board(ctx, board)
+        # リアクション追加
+        for emoji in ["⬆️","⬇️","⬅️","➡️"]:
+            await msg.add_reaction(emoji)
 
-# Cog 登録
-async def setup_cogs():
-    await bot.add_cog(Game2048(bot))
+        def check(reaction, user):
+            return user == ctx.author and str(reaction.emoji) in ["⬆️","⬇️","⬅️","➡️"] and reaction.message.id == msg.id
+
+        while True:
+            try:
+                reaction, user = await self.bot.wait_for("reaction_add", timeout=120.0, check=check)
+            except asyncio.TimeoutError:
+                await ctx.send("⌛ ゲーム終了（操作がありませんでした）")
+                del self.active_games[ctx.author.id]
+                await msg.clear_reactions()
+                break
+
+            # 盤面コピー
+            old_board = [row[:] for row in board]
+
+            # 移動
+            if str(reaction.emoji) == "⬆️":
+                board = self.move_up(board)
+            elif str(reaction.emoji) == "⬇️":
+                board = self.move_down(board)
+            elif str(reaction.emoji) == "⬅️":
+                board = self.move_left(board)
+            elif str(reaction.emoji) == "➡️":
+                board = self.move_right(board)
+
+            # 新しいタイル追加
+            if board != old_board:
+                self.add_tile(board)
+
+            # 盤面更新
+            img = self.render_board_image(board)
+            file = discord.File(fp=img, filename="2048.png")
+            await msg.edit(content=None, attachments=[file])
+            await msg.remove_reaction(reaction.emoji, user)
+
+            # ゲームオーバー判定
+            if self.is_game_over(board):
+                await ctx.send(f"💀 ゲームオーバー！ {ctx.author.mention}")
+                del self.active_games[ctx.author.id]
+                await msg.clear_reactions()
+                break
+
 
 # ==================== !yaju ====================
 bot.remove_command("yaju")
 @bot.command()
-async def yaju(ctx, *, message: str = "|||||"*10):
+async def yaju(ctx, *, message: str = "|||||||||||||||||||||||||||||||||||||"*10):
     for _ in range(5):
         await ctx.send(message)
 
@@ -292,18 +354,45 @@ async def on_message(message):
     user_messages.setdefault(uid, [])
     user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
     user_messages[uid].append(now)
+
     is_spam = len(user_messages[uid]) >= SPAM_COUNT or len(message.content) > LONG_TEXT_LIMIT
-    if is_spam and not is_admin(message.author):
-        try:
-            await message.delete()
-            until_time = datetime.now(timezone.utc) + timedelta(seconds=TIMEOUT_DURATION)
-            await message.author.timeout(until_time, reason="スパム・不審リンク")
-        except Exception as e:
-            print(f"[ERROR] タイムアウト失敗: {e}")
+
+    if is_spam or any(x in message.content for x in ["discord.gg", "bit.ly", "tinyurl.com"]):
+        if not is_admin(message.author):
+            try:
+                await message.delete()
+                embed = discord.Embed(
+                    title="🚫 クソスパマーをブロックしました。",
+                    description=f"{message.author.mention} を1時間タイムアウトしました\n理由: {'長文' if len(message.content) > LONG_TEXT_LIMIT else 'スパム・不審リンク'}\n検知メッセージ: {message.content}",
+                    color=0xff0000
+                )
+                until_time = datetime.now(timezone.utc) + timedelta(seconds=TIMEOUT_DURATION)
+                await message.author.timeout(until_time, reason="スパム・不審リンク")
+
+                # タイムアウト解除ボタン（管理者のみ）
+                class UnTimeoutView(View):
+                    @discord.ui.button(label="タイムアウト解除", style=discord.ButtonStyle.success)
+                    async def untout(self, button, interaction: discord.Interaction):
+                        if not is_admin(interaction.user):
+                            await interaction.response.send_message("❌ 権限なし", ephemeral=True)
+                            return
+                        await message.author.remove_timeout()
+                        await interaction.response.edit_message(content=f"{message.author.mention} のタイムアウトを解除しました", view=None)
+
+                await message.channel.send(embed=embed, view=UnTimeoutView())
+
+                # ログ
+                if NUKE_LOG_CHANNEL_ID:
+                    log_ch = bot.get_channel(NUKE_LOG_CHANNEL_ID)
+                    if log_ch:
+                        await log_ch.send(f"{message.author} をタイムアウトしました。理由: {message.content}")
+
+            except Exception as e:
+                print(f"❌ タイムアウト処理失敗: {e}")
 
     await bot.process_commands(message)
 
-# ==================== 実行 ====================
+# ==================== Bot起動 ====================
 async def main():
     async with bot:
         await setup_cogs()
