@@ -324,7 +324,9 @@ class Game2048(commands.Cog):
                 del self.active_games[ctx.author.id]
                 await msg.clear_reactions()
                 break
-
+# ==================== 2048 Cog 登録 ====================
+async def setup_cogs():
+    await bot.add_cog(Game2048(bot))
 
 # ==================== !yaju ====================
 bot.remove_command("yaju")
