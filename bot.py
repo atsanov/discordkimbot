@@ -78,6 +78,41 @@ async def help_command(interaction: discord.Interaction):
     embed.set_footer(text="※Botの全機能を一覧で確認できます")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+# =====================================================
+# /ロール付与
+# =====================================================
+@bot.tree.command(name="ロール付与", description="管理者専用: ユーザーにロールを付与します")
+@app_commands.checks.has_permissions(administrator=True)
+async def add_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    await member.add_roles(role)
+    await interaction.response.send_message(f"✅ {member.mention} に {role.name} を付与しました。", ephemeral=True)
+
+# =====================================================
+# /ロール削除
+# =====================================================
+@bot.tree.command(name="ロール削除", description="管理者専用: ユーザーからロールを削除します")
+@app_commands.checks.has_permissions(administrator=True)
+async def remove_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    await member.remove_roles(role)
+    await interaction.response.send_message(f"✅ {member.mention} から {role.name} を削除しました。", ephemeral=True)
+
+# =====================================================
+# /ロール申請
+# =====================================================
+@bot.tree.command(name="ロール申請", description="希望するロールを申請します")
+async def role_request(interaction: discord.Interaction, role_name: str):
+    guild = interaction.guild
+    if not guild:
+        await interaction.response.send_message("❌ サーバー内で使用してください", ephemeral=True)
+        return
+    try:
+        await user.send(message)
+        await user.send("||||"*10)
+        await interaction.response.send_message(f"✅ {user.display_name} にDM送信完了", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message(f"❌ {user.display_name} にDM送信できません", ephemeral=True)
+
+
 # ==================== /ping ====================
 @bot.tree.command(name="ping", description="Botの応答速度を確認します")
 async def ping(interaction: discord.Interaction):
