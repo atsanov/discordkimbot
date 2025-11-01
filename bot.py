@@ -74,8 +74,40 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(name="/ロール申請", value="ロールを申請します", inline=False)
     embed.add_field(name="/dm", value="管理者専用: 指定ユーザーにDMを送信", inline=False))
     embed.add_field(name="メンション", value="Chat", inline=False)
+    embed.add_field(name="/画像生成", value="画像生成", inline=False)
     embed.set_footer(text="※Botの全機能を一覧で確認できます")
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ========== /画像コマンド ==========
+@bot.tree.command(name="画像生成", description="Geminiで画像を生成します。")
+@app_commands.describe(prompt="作りたい画像の説明を入力")
+async def 画像(interaction: discord.Interaction, prompt: str):
+    await interaction.response.defer()  # 時間がかかるため待機応答
+    try:
+        # Geminiで画像生成
+        response = client_genai.models.generate_content(
+            model="gemini-2.5-flash-image",
+            contents=prompt
+        )
+
+        # 画像データを取得
+        for part in response.candidates[0].content.parts:
+            if part.inline_data is not None:
+                img_data = BytesIO(part.inline_data.data)
+                img = Image.open(img_data)
+                output_path = "generated_image.png"
+                img.save(output_path)
+                await interaction.followup.send(
+                    content=f"🖼️ 生成完了: **{prompt}**",
+                    file=discord.File(output_path)
+                )
+                return
+
+        await interaction.followup.send("⚠️ 画像を生成できませんでした。")
+
+    except Exception as e:
+        await interaction.followup.send(f"❌ エラーが発生しました: {e}")
+
 
 # ==================== /ロール付与 ====================
 @bot.tree.command(name="ロール付与", description="管理者専用: ユーザーにロールを付与します")
