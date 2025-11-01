@@ -1,3 +1,7 @@
+# ============================================================
+#  Discord × Google Gemini 統合Bot（完全版 / 省略なし）
+# ============================================================
+
 import os
 import random
 import time
@@ -11,6 +15,9 @@ from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont
 import io
 import asyncio
+from google import genai
+from google.genai import types
+from io import BytesIO
 
 # ==================== 環境変数 ====================
 load_dotenv()
@@ -18,9 +25,13 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", 0))
 NUKE_LOG_CHANNEL_ID = int(os.getenv("NUKE_LOG_CHANNEL_ID", 0))
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-if not TOKEN:
-    raise ValueError("❌ 必須環境変数が設定されていません")
+if not TOKEN or not GOOGLE_API_KEY:
+    raise ValueError("❌ 必須環境変数（DISCORD_BOT_TOKEN, GOOGLE_API_KEY）が設定されていません")
+
+# ==================== Google Gemini Client ====================
+client = genai.Client(api_key=GOOGLE_API_KEY)
 
 # ==================== Bot 初期化 ====================
 intents = discord.Intents.default()
@@ -48,7 +59,6 @@ SOVIET_IMAGES = [
     "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7e/Yuri_Andropov.jpg/120px-Yuri_Andropov.jpg",
     "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/Kosygin_1970.jpg/120px-Kosygin_1970.jpg"
 ]
-
 
 # ==================== /help ====================
 @bot.tree.command(name="help", description="Botのコマンド一覧を表示します")
@@ -160,15 +170,20 @@ async def request_to_admin(interaction: discord.Interaction, message: str):
             continue
     await interaction.response.send_message(f"✅ {sent_count}人の管理者に要望を送信しました。", ephemeral=True)
 
-# ==================== ユーティリティ ====================
-def is_admin(user: discord.Member):
-    return user.guild_permissions.administrator or user.guild_permissions.manage_roles
+# ==================== !yaju ====================
+bot.remove_command("yaju")
+@bot.command()
+async def yaju(ctx, *, message: str = "|||||||||||||||||||||||||||||||||||||"*10):
+    for _ in range(5):
+        await ctx.send(message)
 
-# ==================== Cog 2048 ====================
+
+
+# ==================== 2048ゲーム Cog ====================
 class Game2048(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.active_games = {}  # user_id: board
+        self.active_games = {}
 
     def new_board(self):
         board = [[0]*4 for _ in range(4)]
@@ -299,11 +314,42 @@ class Game2048(commands.Cog):
                 await msg.clear_reactions()
                 break
 
-# ==================== Cog 登録 ====================
-async def setup_cogs():
-    await bot.add_cog(Game2048(bot))
+# ==================== Google Gemini 応答機能 ====================
+async def gemini_reply(prompt: str) -> str:
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        return response.text if hasattr(response, "text") else "（AI応答を取得できませんでした）"
+    except Exception as e:
+        return f"⚠️ Geminiエラー: {e}"
 
-# ==================== Bot 起動 ====================
+# ==================== メッセージ監視・AI応答 ====================
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    # BOTへのリプライまたはメンションに反応
+    if message.reference and message.reference.resolved and message.reference.resolved.author == bot.user:
+        query = message.content
+        async with message.channel.typing():
+            ai_response = await gemini_reply(query)
+        await message.reply(ai_response)
+        return
+
+    if bot.user in message.mentions:
+        query = message.content.replace(f"<@{bot.user.id}>", "").strip()
+        if query:
+            async with message.channel.typing():
+                ai_response = await gemini_reply(query)
+            await message.reply(ai_response)
+            return
+
+    await bot.process_commands(message)
+
+# ==================== 起動イベント ====================
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
@@ -315,67 +361,7 @@ async def on_ready():
 
 async def main():
     async with bot:
-        await setup_cogs()
-        await bot.start(TOKEN)
-
-asyncio.run(main())
-
-# ==================== !yaju ====================
-bot.remove_command("yaju")
-@bot.command()
-async def yaju(ctx, *, message: str = "|||||||||||||||||||||||||||||||||||||"*10):
-    for _ in range(5):
-        await ctx.send(message)
-
-# ==================== メッセージ監視 ====================
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    # 自動応答
-    if "MURさん 夜中腹減んないすか？" in message.content:
-        await message.channel.send(f"{message.author.mention} 腹減ったなぁ")
-    if "ソ連画像" in message.content:
-        url = random.choice(SOVIET_IMAGES)
-        embed = discord.Embed(title="🇷🇺 ソビエト画像", color=0xff0000)
-        embed.set_image(url=url)
-        await message.channel.send(embed=embed)
-
-    # スパム・長文監視
-    now = time.time()
-    uid = message.author.id
-    user_messages.setdefault(uid, [])
-    user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
-    user_messages[uid].append(now)
-
-    is_spam = len(user_messages[uid]) >= SPAM_COUNT or len(message.content) > LONG_TEXT_LIMIT
-
-    if is_spam or any(x in message.content for x in ["discord.gg", "bit.ly", "tinyurl.com"]):
-        if not is_admin(message.author):
-            try:
-                await message.delete()
-                embed = discord.Embed(
-                    title="🚫 クソスパマーをブロックしました。",
-                    description=f"{message.author.mention} を1時間タイムアウトしました\n理由: {'長文' if len(message.content) > LONG_TEXT_LIMIT else 'スパム'}",
-                    color=0xff0000
-                )
-                await message.channel.send(embed=embed)
-                await message.author.timeout(timedelta(seconds=TIMEOUT_DURATION))
-            except:
-                pass
-
-    await bot.process_commands(message)
-
-# ==================== 起動 ====================
-async def main():
-    async with bot:
-        await setup_cogs()
-        try:
-            synced = await bot.tree.sync()
-            print(f"✅ Slash commands synced: {len(synced)}")
-        except Exception as e:
-            print(f"❌ Sync failed: {e}")
+        await bot.add_cog(Game2048(bot))
         await bot.start(TOKEN)
 
 asyncio.run(main())
