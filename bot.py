@@ -18,6 +18,8 @@ import asyncio
 from google import genai
 from google.genai import types
 from io import BytesIO
+import openai
+
 
 # ==================== 環境変数 ====================
 load_dotenv()
@@ -26,6 +28,7 @@ GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", 0))
 NUKE_LOG_CHANNEL_ID = int(os.getenv("NUKE_LOG_CHANNEL_ID", 0))
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 if not TOKEN or not GOOGLE_API_KEY:
     raise ValueError("❌ 必須環境変数（DISCORD_BOT_TOKEN, GOOGLE_API_KEY）が設定されていません")
@@ -347,38 +350,59 @@ class Game2048(commands.Cog):
                 await msg.clear_reactions()
                 break
 
-# ==================== Google Gemini 応答機能 ====================
-async def gemini_reply(prompt: str) -> str:
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        return response.text if hasattr(response, "text") else "（AI応答を取得できませんでした）"
-    except Exception as e:
-        return f"⚠️ Geminiエラー: {e}"
+
+
+async def chatgpt_reply(message_content):
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": message_content}],
+        temperature=0.7,
+        max_tokens=500
+    )
+    return response.choices[0].message.content
+
 
 # ==================== メッセージ監視・AI応答 ====================
+if bot.user.mention in message.content:
+    reply_text = await chatgpt_reply(message.content.replace(bot.user.mention, "").strip())
+    await message.channel.send(f"{message.author.mention} {reply_text}")
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # BOTへのリプライまたはメンションに反応
-    if message.reference and message.reference.resolved and message.reference.resolved.author == bot.user:
-        query = message.content
-        async with message.channel.typing():
-            ai_response = await gemini_reply(query)
-        await message.reply(ai_response)
-        return
+    # 自動応答
+    if "MURさん 夜中腹減んないすか？" in message.content:
+        await message.channel.send(f"{message.author.mention} 腹減ったなぁ")
+    if "ソ連画像" in message.content:
+        url = random.choice(SOVIET_IMAGES)
+        embed = discord.Embed(title="🇷🇺 ソビエト画像", color=0xff0000)
+        embed.set_image(url=url)
+        await message.channel.send(embed=embed)
 
-    if bot.user in message.mentions:
-        query = message.content.replace(f"<@{bot.user.id}>", "").strip()
-        if query:
-            async with message.channel.typing():
-                ai_response = await gemini_reply(query)
-            await message.reply(ai_response)
-            return
+    # スパム・長文監視
+    now = time.time()
+    uid = message.author.id
+    user_messages.setdefault(uid, [])
+    user_messages[uid] = [t for t in user_messages[uid] if now - t < SPAM_THRESHOLD]
+    user_messages[uid].append(now)
+
+    is_spam = len(user_messages[uid]) >= SPAM_COUNT or len(message.content) > LONG_TEXT_LIMIT
+
+    if is_spam or any(x in message.content for x in ["discord.gg", "bit.ly", "tinyurl.com"]):
+        if not is_admin(message.author):
+            try:
+                await message.delete()
+                embed = discord.Embed(
+                    title="🚫 クソスパマーをブロックしました。",
+                    description=f"{message.author.mention} を1時間タイムアウトしました\n理由: {'長文' if len(message.content) > LONG_TEXT_LIMIT else 'スパム'}",
+                    color=0xff0000
+                )
+                await message.channel.send(embed=embed)
+                await message.author.timeout(timedelta(seconds=TIMEOUT_DURATION))
+            except:
+                pass
 
     await bot.process_commands(message)
 
