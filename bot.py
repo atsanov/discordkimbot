@@ -72,7 +72,8 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(name="/ロール付与", value="ロールを付与します", inline=False)
     embed.add_field(name="/ロール削除", value="ロールを削除します", inline=False)
     embed.add_field(name="/ロール申請", value="ロールを申請します", inline=False)
-    embed.add_field(name="/dm", value="管理者専用: 指定ユーザーにDMを送信", inline=False)
+    embed.add_field(name="/dm", value="管理者専用: 指定ユーザーにDMを送信", inline=False))
+    embed.add_field(name="メンション", value="Chat", inline=False)
     embed.set_footer(text="※Botの全機能を一覧で確認できます")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
