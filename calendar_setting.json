@@ -1,6 +1,5 @@
+/* calendar_setting.json */
 {
-  "guild_id": {
-    "calendar_channel_id": "チャンネルID",
-    "is_enabled": true
-  }
+  "timezone": "Asia/Tokyo",
+  "default_channel_type": "slack"
 }
