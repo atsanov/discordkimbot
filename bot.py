@@ -32,6 +32,12 @@ NUKE_LOG_CHANNEL_ID = 0
 BACKUP_DIR = "server_backups" # サーバーバックアップファイルを保存するディレクトリ
 CALENDAR_SETTINGS_FILE = "calendar_setting.json" # カレンダー設定ファイル
 
+# ===== リモート管理用 =====
+ADMIN_GUILD_ID = 1447498287560130562 # 管理専用サーバーID
+
+def is_admin_guild(ctx):
+    return ctx.guild and ctx.guild.id == ADMIN_GUILD_ID
+
 if not TOKEN:
     raise ValueError("❌ 必須環境変数（DISCORD_BOT_TOKEN）が設定されていません")
 
@@ -596,6 +602,90 @@ async def on_ready():
         print("✅ 毎日カレンダー日報タスクを開始しました。")
 
 # ... 復元/バックアップなどの管理コマンドが続く ...
+
+@bot.command()
+async def adm(ctx, sub=None, *args):
+    if not is_admin_guild(ctx):
+        return
+
+    # help
+    if sub is None or sub == "help":
+        await ctx.send("""
+!adm server
+!adm url <serverID>
+!adm ban <serverID> <userID>
+!adm d ban <serverID> <userID>
+!adm kick <serverID> <userID>
+!adm バックアップ削除
+!adm d bot <serverID>
+""")
+
+    # server list
+    elif sub == "server":
+        txt = ""
+        for g in bot.guilds:
+            txt += f"{g.name} | {g.id}\n"
+        await ctx.send(f"```{txt}```")
+
+    # invite url
+    elif sub == "url":
+        gid = int(args[0])
+        guild = bot.get_guild(gid)
+        if not guild:
+            await ctx.send("サーバーが見つかりません")
+            return
+
+        for ch in guild.text_channels:
+            if ch.permissions_for(guild.me).create_instant_invite:
+                invite = await ch.create_invite(max_age=300)
+                await ctx.send(invite.url)
+                return
+
+    # ban
+    elif sub == "ban":
+        gid = int(args[0])
+        uid = int(args[1])
+        guild = bot.get_guild(gid)
+        user = await bot.fetch_user(uid)
+        await guild.ban(user, reason="remote adm ban")
+        await ctx.send("BAN完了")
+
+    # d ban
+    elif sub == "d" and args and args[0] == "ban":
+        gid = int(args[1])
+        uid = int(args[2])
+        guild = bot.get_guild(gid)
+        user = await bot.fetch_user(uid)
+        await guild.unban(user, reason="remote adm unban")
+        await ctx.send("BAN解除完了")
+
+    # kick
+    elif sub == "kick":
+        gid = int(args[0])
+        uid = int(args[1])
+        guild = bot.get_guild(gid)
+        member = guild.get_member(uid)
+
+        if member:
+            await member.kick(reason="remote adm kick")
+            await ctx.send("KICK完了")
+
+    # バックアップ削除
+    elif sub == "バックアップ削除":
+        path = "./ratio.json"
+        if os.path.exists(path):
+            os.remove(path)
+            await ctx.send("ratio.json を削除しました")
+        else:
+            await ctx.send("ratio.json が見つかりません")
+
+    # d bot
+    elif sub == "d" and args and args[0] == "bot":
+        gid = int(args[1])
+        guild = bot.get_guild(gid)
+        if guild:
+            await guild.leave()
+            await ctx.send("BOT脱退完了")
 
 # Botの実行 (元のファイルの最後に配置)
 # if TOKEN:
