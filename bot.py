@@ -604,6 +604,235 @@ async def on_ready():
         print("✅ 毎日カレンダー日報タスクを開始しました。")
 
 # ... 復元/バックアップなどの管理コマンドが続く ...
+@bot.tree.command(name="サーバーコピー", description="現在のサーバーのテンプレートを作成し、URLを提供します (サーバー管理権限が必要)")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def create_server_template(interaction: discord.Interaction):
+    guild = interaction.guild
+    if not guild:
+        await interaction.response.send_message("❌ サーバー内でのみ使用可能です。", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        template_name = f"{guild.name}のコピー by Bot ({datetime.now().strftime('%Y-%m-%d')})"
+        template_description = "Botによって自動作成されたサーバーテンプレートです。"
+        
+        template = await guild.create_template(name=template_name, description=template_description)
+        template_url = f"https://discord.new/{template.code}"
+        
+        embed = discord.Embed(
+            title="✅ サーバーテンプレートが作成されました",
+            description=f"このURLを使用して、現在のサーバーと同じ設定（チャンネル、ロール等）の新しいサーバーを作成できます。",
+            color=0x3498db
+        )
+        embed.add_field(name="🔗 招待URL", value=f"[ここをクリックして新しいサーバーを作成]({template_url})", inline=False)
+        embed.set_footer(text="このURLは管理者のみに表示されています。共有にはご注意ください。")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    except discord.Forbidden:
+        await interaction.followup.send("❌ Botに「サーバーの管理 (manage_guild)」権限がないため、テンプレートを作成できません。", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ テンプレート作成中にエラーが発生しました: {e}", ephemeral=True)
+
+### 4. サーバー破壊復元機能
+
+class RestoreConfirmView(discord.ui.View):
+    def __init__(self, bot, guild_id, data, timeout=60):
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.guild_id = guild_id
+        self.data = data
+        self.message = None
+
+    async def on_timeout(self):
+        if self.message:
+            for item in self.children:
+                item.disabled = True
+            await self.message.edit(content="⚠️ 復元確認がタイムアウトしました。処理は実行されません。", view=self)
+
+    @discord.ui.button(label="はい、復元を実行します (全チャンネル削除)", style=discord.ButtonStyle.danger)
+    async def confirm_restore(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ 管理者権限が必要です。", ephemeral=True)
+            return
+
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="⏳ 復元処理を開始します... (数分かかる場合があります)", view=self)
+        
+        guild = interaction.guild
+        if not guild:
+            await interaction.followup.send("❌ サーバーが見つかりません。", ephemeral=True)
+            return
+
+        await self.execute_restore(guild, self.data, interaction.followup, interaction.message)
+        
+    async def execute_restore(self, guild, data, followup, original_message):
+        start_time = time.time()
+        
+        # --- 1. 全チャンネルの削除 --- 
+        await followup.send("1️⃣ 既存の全チャンネルを削除中...", ephemeral=True)
+        try:
+            sorted_channels = sorted(guild.channels, key=lambda c: isinstance(c, discord.CategoryChannel))
+            for channel in sorted_channels:
+                if channel.id != original_message.channel.id:
+                    await channel.delete()
+                    await asyncio.sleep(0.3)
+        except discord.Forbidden:
+            await followup.send("❌ チャンネル削除に必要な権限がBotにありません。", ephemeral=True)
+            return
+
+        # --- 2. ロールマップの作成と更新 ---
+        await followup.send("2️⃣ ロール構造を再構築中...", ephemeral=True)
+        role_map = {}
+        
+        for role_data in sorted(data['roles'], key=lambda x: x['position']):
+            if role_data['name'] == '@everyone':
+                role = guild.default_role
+                await role.edit(permissions=discord.Permissions(role_data['permissions']))
+            else:
+                role = discord.utils.get(guild.roles, name=role_data['name'])
+                if not role:
+                    try:
+                        role = await guild.create_role(
+                            name=role_data['name'],
+                            permissions=discord.Permissions(role_data['permissions']),
+                            color=discord.Color(role_data['color']),
+                            reason="サーバー復元によるロール再作成"
+                        )
+                    except discord.Forbidden:
+                        await followup.send("⚠️ ロール作成に必要な権限が不足しています。ロールの復元が不完全です。", ephemeral=True)
+                        break
+                
+            role_map[role_data['id']] = role
+
+        # --- 3. チャンネルの再作成 ---
+        await followup.send("3️⃣ チャンネルとカテゴリを再作成中...", ephemeral=True)
+        category_map = {}
+
+        def sort_key(c):
+            is_category = 'category' in c['type']
+            return (0 if is_category else 1, c.get('position', 9999))
+
+        sorted_channels = sorted(data['channels'], key=sort_key)
+        
+        for channel_data in sorted_channels:
+            
+            overwrites = {}
+            for ow in channel_data['overwrites']:
+                target = role_map.get(ow['id']) 
+                if target:
+                    overwrites[target] = discord.PermissionOverwrite(
+                        allow=discord.Permissions(ow['allow']),
+                        deny=discord.Permissions(ow['deny'])
+                    )
+
+            parent = None
+            if channel_data.get('category_id') and channel_data.get('category_name'):
+                if channel_data['category_id'] not in category_map:
+                    try:
+                        parent = await guild.create_category(
+                            channel_data['category_name'],
+                            overwrites=overwrites if 'category' in channel_data['type'] else None,
+                            position=channel_data['position']
+                        )
+                        category_map[channel_data['category_id']] = parent
+                    except Exception:
+                        parent = None
+                else:
+                    parent = category_map[channel_data['category_id']]
+
+            try:
+                if 'category' in channel_data['type']:
+                    pass
+                elif 'text' in channel_data['type']:
+                    await guild.create_text_channel(
+                        channel_data['name'],
+                        topic=channel_data.get('topic'),
+                        category=parent,
+                        overwrites=overwrites
+                    )
+                elif 'voice' in channel_data['type']:
+                    await guild.create_voice_channel(
+                        channel_data['name'],
+                        bitrate=channel_data.get('bitrate'),
+                        user_limit=channel_data.get('user_limit'),
+                        category=parent,
+                        overwrites=overwrites
+                    )
+                await asyncio.sleep(1.5)
+
+            except Exception as e:
+                print(f"チャンネル作成エラー ({channel_data['name']}): {e}")
+
+
+        end_time = time.time()
+        await original_message.edit(content=f"✅ サーバーの復元が完了しました！ ({end_time - start_time:.2f}秒)", view=None)
+
+
+@bot.tree.command(name="backup", description="サーバーのチャンネル・ロール構造をローカルに保存します (管理者専用)")
+@app_commands.checks.has_permissions(administrator=True)
+async def backup_server(interaction: discord.Interaction):
+    guild = interaction.guild
+    await interaction.response.defer(thinking=True, ephemeral=True)
+
+    try:
+        if not os.path.exists(BACKUP_DIR):
+            os.makedirs(BACKUP_DIR)
+
+        backup_data = {
+            "guild_id": guild.id,
+            "guild_name": guild.name,
+            "roles": extract_role_data(guild),
+            "channels": extract_channel_data(guild),
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+
+        # 💡 変更箇所 2: ファイル名を raito.json に変更
+        file_path = get_backup_path(guild.id)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(backup_data, f, ensure_ascii=False, indent=4)
+
+        await interaction.followup.send(f"✅ サーバー構造のバックアップが完了しました！\nファイル: `{file_path}`", ephemeral=True)
+
+    except Exception as e:
+        await interaction.followup.send(f"❌ バックアップ中にエラーが発生しました: {e}", ephemeral=True)
+
+
+@bot.tree.command(name="restore", description="バックアップデータからサーバーを復元します (破壊的処理/管理者専用)")
+@app_commands.checks.has_permissions(administrator=True)
+async def restore_server(interaction: discord.Interaction):
+    guild = interaction.guild
+    
+    # 💡 変更箇所 3: ファイル名を raito.json に変更
+    file_path = get_backup_path(guild.id)
+
+    if not os.path.exists(file_path):
+        await interaction.response.send_message("❌ バックアップファイルが見つかりません。先に `/backup` を実行してください。", ephemeral=True)
+        return
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        backup_time = datetime.fromisoformat(data['created_at']).astimezone(timezone(timedelta(hours=9))).strftime('%Y年%m月%d日 %H時%M分')
+
+        embed = discord.Embed(
+            title="⚠️ サーバー復元の最終確認 (破壊的処理)",
+            description=f"バックアップデータ（{backup_time}作成）を使用してサーバー構造を復元しますか？\n\n**この操作は、現在の** **`全てのチャンネルを削除`** **し、ロール設定を上書きします。**",
+            color=0xffa500
+        )
+        
+        view = RestoreConfirmView(bot, guild.id, data)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        view.message = await interaction.original_response()
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ 復元準備中にエラーが発生しました: {e}", ephemeral=True)
+
+---
 
 @bot.command()
 async def adm(ctx, sub=None, *args):
@@ -694,3 +923,4 @@ print("Botを起動しています...")
 # Botの実行 (元のファイルの最後に配置)
 if TOKEN:
      bot.run(TOKEN)
+
