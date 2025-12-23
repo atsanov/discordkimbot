@@ -1,9 +1,9 @@
 # ============================================================
-#  Discord Bot 最終統合版 (Raspberry Pi 3/1GB 環境向け)
-#  - 破壊復元機能、語録一覧表示機能を搭載
-#  - AI、2048ゲーム機能を削除
-#  - バックアップファイル名を raito.json に変更
-#  - スパム対策、カレンダー機能（日報/検索）を追加
+#  Discord Bot 最終統合版 (Raspberry Pi 3/1GB 環境向け)
+#  - 破壊復元機能、語録一覧表示機能を搭載
+#  - AI、2048ゲーム機能を削除
+#  - バックアップファイル名を raito.json に変更
+#  - スパム対策、カレンダー機能（日報/検索）を追加
 # ============================================================
 
 import os
@@ -136,22 +136,22 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ==================== スパム管理定数 ====================
 user_messages = {}
 SPAM_THRESHOLD = 30 # 秒
-SPAM_COUNT = 6  # 30秒間に許容されるメッセージ数   
+SPAM_COUNT = 6  # 30秒間に許容されるメッセージ数
 LONG_TEXT_LIMIT = 1500 # 文字
 TIMEOUT_DURATION = 3600 # 1時間（秒）
 
 # ==================== ソ連画像リスト ====================
 SOVIET_IMAGES = [
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Lenin_in_1920_%28cropped%29.jpg/120px-Lenin_in_1920_%28cropped%29.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/StalinCropped1943.jpg/120px-StalinCropped1943.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/4/42/Georgy_Malenkov_1964.jpg/120px-Georgy_Malenkov_1964.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Bundesarchiv_Bild_183-B0628-0015-035%2C_Nikita_S._Chruschtschow.jpg/120px-Bundesarchiv_Bild_183-B0628-0015-035%2C_Nikita_S._Chruschtschow.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/Leonid_Brezjnev%2C_leider_van_de_Sovjet-Unie%2C_Bestanddeelnr_925-6564.jpg/120px-Leonid_Brezjnev%2C_leider_van_de_Sovjet-Unie%2C_Bestanddeelnr_925-6564.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/1/12/ANDROPOV1980S.jpg/120px-ANDROPOV1980S.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/Konstantin_Ustinovi%C4%8D_%C4%Chern%C4%9Bnko%2C_1973.jpg/120px-Konstantin_Ustinovi%C4%8D_%C4%Chern%C4%9Bnko%2C_1973.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Mikhail_Gorbachev_in_the_White_House_Library_Library_%C2%B7_Library_%28cropped%29.jpg/120px-Mikhail_Gorbachev_in_the_White_House_Library_Library_%C2%B7_Library_%28cropped%29.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7e/Yuri_Andropov.jpg/120px-Yuri_Andropov.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/Kosygin_1970.jpg/120px-Kosygin_1970.jpg"
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Lenin_in_1920_%28cropped%29.jpg/120px-Lenin_in_1920_%28cropped%29.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/StalinCropped1943.jpg/120px-StalinCropped1943.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/4/42/Georgy_Malenkov_1964.jpg/120px-Georgy_Malenkov_1964.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Bundesarchiv_Bild_183-B0628-0015-035%2C_Nikita_S._Chruschtschow.jpg/120px-Bundesarchiv_Bild_183-B0628-0015-035%2C_Nikita_S._Chruschtschow.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/Leonid_Brezjnev%2C_leider_van_de_Sovjet-Unie%2C_Bestanddeelnr_925-6564.jpg/120px-Leonid_Brezjnev%2C_leider_van_de_Sovjet-Unie%2C_Bestanddeelnr_925-6564.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/1/12/ANDROPOV1980S.jpg/120px-ANDROPOV1980S.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/Konstantin_Ustinovi%C4%8D_%C4%Chern%C4%9Bnko%2C_1973.jpg/120px-Konstantin_Ustinovi%C4%8D_%C4%Chern%C4%9Bnko%2C_1973.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/5/55/Mikhail_Gorbachev_in_the_White_House_Library_Library_%C2%B7_Library_%28cropped%29.jpg/120px-Mikhail_Gorbachev_in_the_White_House_Library_Library_%C2%B7_Library_%28cropped%29.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7e/Yuri_Andropov.jpg/120px-Yuri_Andropov.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/Kosygin_1970.jpg/120px-Kosygin_1970.jpg"
 ]
 
 # ============================================================
@@ -446,7 +446,9 @@ def create_calendar_embed(events, title, color):
 # 毎日午前0時 (JST) に実行
 JST_TZ = timezone(timedelta(hours=9))
 
-@tasks.loop(time=datetime.time(hour=0, minute=0, tzinfo=JST_TZ))
+# 修正後 (正しい書き方)
+import datetime as dt_module
+@tasks.loop(time=dt_module.time(hour=0, minute=0, tzinfo=JST_TZ))
 async def daily_calendar_report():
     
     today = datetime.now(JST_TZ)
@@ -564,7 +566,7 @@ class RestoreConfirmView(discord.ui.View):
     #... 復元処理は元のbot (1).pyの内容を維持して省略 ...
 
 # -----------------
-#  イベントハンドラ
+#  イベントハンドラ
 # -----------------
 
 @bot.event
@@ -687,6 +689,8 @@ async def adm(ctx, sub=None, *args):
             await guild.leave()
             await ctx.send("BOT脱退完了")
 
+print("Botを起動しています...")
+
 # Botの実行 (元のファイルの最後に配置)
-# if TOKEN:
-#     bot.run(TOKEN)
+if TOKEN:
+     bot.run(TOKEN)

@@ -1,5 +1,5 @@
-/* calendar_setting.json */
 {
-  "timezone": "Asia/Tokyo",
-  "default_channel_type": "slack"
+    "timezone": "Asia/Tokyo",
+    "default_channel_type": "slack",
+    "1419997636210983016": "1419997637352099887"
 }
