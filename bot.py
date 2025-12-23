@@ -136,7 +136,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ==================== スパム管理定数 ====================
 user_messages = {}
 SPAM_THRESHOLD = 30 # 秒
-SPAM_COUNT = 6    # 30秒間に許容されるメッセージ数
+SPAM_COUNT = 6  # 30秒間に許容されるメッセージ数   
 LONG_TEXT_LIMIT = 1500 # 文字
 TIMEOUT_DURATION = 3600 # 1時間（秒）
 
