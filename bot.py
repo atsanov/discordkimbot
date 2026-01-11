@@ -832,7 +832,6 @@ async def restore_server(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message(f"❌ 復元準備中にエラーが発生しました: {e}", ephemeral=True)
 
----
 
 @bot.command()
 async def adm(ctx, sub=None, *args):
