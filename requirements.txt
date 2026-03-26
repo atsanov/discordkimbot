@@ -1,7 +1,6 @@
-discord.py>=2.3.0
-requests
+discord.py
 python-dotenv
-openai>=1.32.0
-aiohttp
-pillow
-google-genai>=0.1.0
+openai
+google-generativeai
+deepl
+yt-dlp
