@@ -444,7 +444,7 @@ async def on_command(ctx):
 async def on_ready():
     print(f"✅ ログインしました: {bot.user.name}")
 
-    # --- 追加部分: 外部ファイルの読み込み ---
+    # --- 外部ファイルの読み込み ---
     extensions = ["2048", "ai_chat", "music", "server", "deepl"]
 
     for ext in extensions:
@@ -453,13 +453,17 @@ async def on_ready():
             print(f"📦 {ext} を読み込みました")
         except Exception as e:
             print(f"⚠️ {ext} の読み込みに失敗: {e}")
-    # ------------------------------------
 
-    # スラッシュコマンド（/2048など）をDiscordに登録
-    await bot.tree.sync()
-    print("🚀 スラッシュコマンドを同期しました")
+    # --- スラッシュコマンド & コンテキストメニューを同期 ---
+    try:
+        await bot.tree.sync()
+        print("🚀 アプリコマンドを同期しました")
+    except Exception as e:
+        print(f"❌ 同期エラー: {e}")
 
     if not daily_calendar_report.is_running():
         daily_calendar_report.start()
 
-if TOKEN: bot.run(TOKEN)
+# 起動コマンドは必ず一番最後！！
+if TOKEN: 
+    bot.run(TOKEN)
