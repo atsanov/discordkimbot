@@ -14,7 +14,7 @@ DeepL翻訳（ベータ版）
 3. `.env` ファイルを作成し、各種APIキーを設定
 4. `python3 bot.py` で起動
 
-事前に用意しておくべきもの
+#　事前に用意しておくべきもの
 OpenRouter API
 DEEPLAPI
 GnewsAPI
